@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Telegram Mini App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            /* Используем системные цвета Telegram для темной/светлой темы */
+            background-color: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        button {
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Привет, <span id="user-name">пользователь</span>!</h1>
+    <p>Это твое первое Mini App приложение.</p>
+    <button id="send-data-btn">Отправить данные боту</button>
+
+    <script>
+        // Инициализация WebApp
+        const tg = window.Telegram.WebApp;
+
+        // Расширяем приложение на все окно
+        tg.expand();
+
+        // Подставляем имя пользователя из данных Telegram
+        const userName = document.getElementById('user-name');
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            userName.innerText = tg.initDataUnsafe.user.first_name;
+        }
+
+        // Логика кнопки
+        const btn = document.getElementById('send-data-btn');
+        btn.addEventListener('click', () => {
+            const data = {
+                message: "Привет из Web App!",
+                timestamp: Date.now()
+            };
+            // Отправляем данные боту (работает только для кнопок типа KeyboardButton)
+            tg.sendData(JSON.stringify(data));
+            
+            // Закрываем приложение
+            tg.close();
+        });
+    </script>
+</body>
+</html>
