@@ -3,623 +3,262 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Epic Crash</title>
+    <title>Crypto Crash Live</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        :root {
-            --bg-color: #121214;
-            --card-bg: #1d1d1f;
-            --accent-blue: #3b82f6;
-            --accent-green: #10b981;
-            --text-color: #ffffff;
-            --text-secondary: #9ca3af;
-        }
-
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-
-        body {
-            margin: 0;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-family: 'Inter', sans-serif;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-
-        /* --- HEADER --- */
-        .header {
-            padding: 12px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            z-index: 10;
-        }
-        .status-badge {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            background: rgba(255,255,255,0.1);
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            color: #4ade80;
-        }
-        .dot { width: 6px; height: 6px; background: #4ade80; border-radius: 50%; box-shadow: 0 0 5px #4ade80; }
+        body { margin: 0; background: #0f1923; color: white; font-family: sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         
-        .balance-pill {
-            background: #252528;
-            padding: 6px 12px;
-            border-radius: 20px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .diamond-icon { color: #3b82f6; font-size: 14px; }
-
-        /* --- GAME AREA --- */
+        /* Game Area */
         .game-wrapper {
             position: relative;
-            width: 100%;
-            height: 280px; /* Фиксированная высота как на видео */
-            background: radial-gradient(circle at bottom, #1e1e24 0%, #121214 70%);
-            overflow: hidden;
+            flex-grow: 1;
+            background: radial-gradient(circle at bottom, #1c252e 0%, #000000 100%);
+            border-bottom: 2px solid #333;
         }
         canvas { display: block; width: 100%; height: 100%; }
 
-        /* OVERLAYS (Countdown & Multiplier) */
-        .center-overlay {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            pointer-events: none;
+        .center-info {
+            position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; pointer-events: none;
         }
+        .multiplier { font-size: 60px; font-weight: 900; text-shadow: 0 0 20px rgba(255,255,255,0.2); }
+        .crashed { color: #ff4757; text-shadow: 0 0 20px rgba(255, 71, 87, 0.5); }
+        .status { font-size: 20px; color: #aaa; margin-top: 10px; }
+
+        /* Controls */
+        .controls { padding: 15px; background: #151e27; z-index: 10; }
         
-        .countdown {
-            font-size: 80px;
-            font-weight: 900;
-            color: white;
-            text-shadow: 0 0 30px rgba(255,255,255,0.2);
-            opacity: 0;
-            transform: translate(-50%, -50%) scale(0.5);
-        }
-        .countdown.active { animation: popIn 0.8s forwards; }
+        .history { display: flex; gap: 5px; margin-bottom: 10px; overflow-x: auto; height: 30px; }
+        .badge { padding: 5px 10px; border-radius: 5px; background: #333; font-size: 12px; font-weight: bold; flex-shrink: 0; }
+        .badge.green { color: #2ecc71; background: rgba(46, 204, 113, 0.2); }
+        .badge.red { color: #ff4757; background: rgba(255, 71, 87, 0.2); }
 
-        @keyframes popIn {
-            0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
-            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
-            100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
-        }
-
-        .multiplier-text {
-            font-size: 48px;
-            font-weight: 800;
-            color: white;
-            opacity: 0;
-            transition: color 0.2s;
-        }
-        .multiplier-text.visible { opacity: 1; }
-        .multiplier-text.crashed { color: #ef4444; }
-
-        /* --- CONTROLS AREA --- */
-        .controls-container {
-            background: var(--bg-color);
-            padding: 10px 16px;
-            border-top-left-radius: 20px;
-            border-top-right-radius: 20px;
-            margin-top: -20px; /* Наезд на канвас */
-            z-index: 20;
-            position: relative;
-        }
-
-        /* HISTORY ROW */
-        .history-row {
-            display: flex;
-            gap: 8px;
-            overflow-x: auto;
-            padding-bottom: 10px;
-            margin-bottom: 5px;
-        }
-        .history-row::-webkit-scrollbar { display: none; }
+        .bet-panel { display: flex; gap: 10px; margin-bottom: 10px; }
+        .input-box { flex: 1; background: #0f1923; border: 1px solid #333; border-radius: 10px; color: white; padding: 10px; text-align: center; font-size: 18px; }
         
-        .badge {
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 700;
-            flex-shrink: 0;
-            background: #2a2a2c;
-            color: #9ca3af;
-        }
-        .badge.purple { color: #c084fc; background: rgba(192, 132, 252, 0.15); }
-        .badge.gold { color: #fbbf24; background: rgba(251, 191, 36, 0.15); }
-        .badge.blue { color: #60a5fa; background: rgba(96, 165, 250, 0.15); }
+        .btn { width: 100%; padding: 18px; border-radius: 12px; border: none; font-size: 20px; font-weight: bold; cursor: pointer; color: white; transition: 0.1s; }
+        .btn-bet { background: #2ecc71; box-shadow: 0 4px 0 #27ae60; }
+        .btn-bet:active { transform: translateY(2px); box-shadow: none; }
+        .btn-cashout { background: #f39c12; box-shadow: 0 4px 0 #d35400; }
+        .btn-wait { background: #34495e; color: #7f8c8d; pointer-events: none; }
 
-        /* BET BUTTONS */
-        .main-btn {
-            width: 100%;
-            height: 56px;
-            border-radius: 16px;
-            border: none;
-            font-size: 18px;
-            font-weight: 700;
-            color: white;
-            cursor: pointer;
-            transition: transform 0.1s;
-            margin-bottom: 15px;
-            position: relative;
-            overflow: hidden;
-        }
-        .main-btn:active { transform: scale(0.98); }
-        
-        .btn-blue { background: #3b82f6; box-shadow: 0 4px 0 #2563eb; }
-        .btn-red { background: #ef4444; box-shadow: 0 4px 0 #dc2626; }
-        .btn-green { background: #10b981; box-shadow: 0 4px 0 #059669; }
-        .btn-disabled { background: #374151; color: #9ca3af; box-shadow: none; pointer-events: none; }
-
-        .bet-inputs {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        .input-box {
-            background: #1d1d1f;
-            border: 1px solid #333;
-            border-radius: 12px;
-            padding: 8px;
-            flex: 1;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .input-box span { font-size: 12px; color: #9ca3af; }
-        .input-val { font-weight: bold; }
-
-        /* --- PLAYERS LIST (FAKE) --- */
-        .players-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 0 16px;
-            background: var(--bg-color);
-        }
-        .player-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-            font-size: 13px;
-        }
-        .player-info { display: flex; align-items: center; gap: 8px; }
-        .avatar { width: 24px; height: 24px; border-radius: 50%; background: #333; display: flex; align-items: center; justify-content: center; font-size: 10px; }
-        .player-bet { color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
-        .player-win { color: var(--accent-green); font-weight: bold; background: rgba(16, 185, 129, 0.1); padding: 2px 6px; border-radius: 4px; }
-
-        /* --- BOTTOM NAV --- */
-        .bottom-nav {
-            display: flex;
-            justify-content: space-around;
-            padding: 10px 0;
-            background: #18181b;
-            border-top: 1px solid rgba(255,255,255,0.05);
-        }
-        .nav-item {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 4px;
-            font-size: 10px;
-            color: #6b7280;
-            cursor: pointer;
-        }
-        .nav-item.active { color: white; }
-        .nav-icon { font-size: 20px; }
-
+        .balance { font-size: 14px; color: #2ecc71; margin-bottom: 5px; display: flex; justify-content: space-between; }
     </style>
 </head>
 <body>
 
-    <div class="header">
-        <div class="status-badge"><div class="dot"></div> Live</div>
-        <div class="balance-pill">
-            <span class="diamond-icon">💎</span>
-            <span id="balanceDisplay">1000.00</span>
-        </div>
-    </div>
-
     <div class="game-wrapper">
-        <canvas id="gameCanvas"></canvas>
+        <canvas id="canvas"></canvas>
+        <div class="center-info">
+            <div id="mDisplay" class="multiplier">1.00x</div>
+            <div id="statusDisplay" class="status">Connecting...</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="balance">
+            <span>BALANCE: <b id="balDisplay">0</b></span>
+            <span id="connStatus">🔴 Offline</span>
+        </div>
         
-        <div class="center-overlay countdown" id="cnt3">3</div>
-        <div class="center-overlay countdown" id="cnt2">2</div>
-        <div class="center-overlay countdown" id="cnt1">1</div>
-        <div class="center-overlay multiplier-text" id="multiDisplay">1.00x</div>
-    </div>
+        <div class="history" id="historyRow"></div>
 
-    <div class="controls-container">
-        <div class="history-row" id="historyRow">
-            <div class="badge purple">5.10x</div>
-            <div class="badge">1.10x</div>
-            <div class="badge gold">26.1x</div>
+        <div class="bet-panel">
+            <button onclick="adjBet(-50)" style="background:#333; border:none; color:white; border-radius:5px; width:40px;">-</button>
+            <input type="number" id="betInput" class="input-box" value="100" readonly>
+            <button onclick="adjBet(50)" style="background:#333; border:none; color:white; border-radius:5px; width:40px;">+</button>
         </div>
 
-        <div class="bet-inputs">
-            <div class="input-box" onclick="changeBet(-50)">
-                <span>Bet</span>
-                <span class="input-val" id="betVal">100</span>
-            </div>
-             <div class="input-box" onclick="changeBet(50)">
-                <span>+50</span>
-            </div>
-         </div>
-
-        <button class="main-btn btn-blue" id="actionBtn" onclick="handleAction()">Place bet</button>
-    </div>
-
-    <div class="players-list" id="playersList">
-        </div>
-
-    <div class="bottom-nav">
-        <div class="nav-item"><span class="nav-icon">🎒</span>Backpack</div>
-        <div class="nav-item"><span class="nav-icon">👥</span>Invite</div>
-        <div class="nav-item active"><span class="nav-icon">🏠</span>Home</div>
-        <div class="nav-item"><span class="nav-icon">🏆</span>Ranking</div>
-        <div class="nav-item"><span class="nav-icon">💰</span>Earn</div>
+        <button id="mainBtn" class="btn btn-wait" onclick="action()">LOADING...</button>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // --- GAME VARIABLES ---
-        const urlParams = new URLSearchParams(window.location.search);
-        let balance = parseFloat(urlParams.get('start_balance')) || 1000.00;
-        let currentBet = 100;
-        
-        let gameState = 'WAITING'; // WAITING -> COUNTDOWN -> FLYING -> CRASHED
-        let userBetPlaced = false;
-        let multiplier = 1.00;
-        let crashPoint = 0;
-        let animationId;
-        
-        // Canvas & Assets
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-        let W, H;
-        
-        // Rocket Emoji (Using text for ease, can be replaced with Image)
-        const ROCKET_ICON = "🚀"; 
+        // ==========================================================
+        // 🔴 ВСТАВЬ СЮДА СВОЙ ДОМЕН С BOTHOST (с https://)
+        // Пример: const SERVER_URL = "https://bot-12345.bothost.ru";
+        const SERVER_URL = "https://ВАШ_ДОМЕН_С_BOTHOST.ru"; 
+        // ==========================================================
 
-        // UI Elements
-        const elBalance = document.getElementById('balanceDisplay');
-        const elMulti = document.getElementById('multiDisplay');
-        const elBtn = document.getElementById('actionBtn');
-        const elBetVal = document.getElementById('betVal');
-        const elHistory = document.getElementById('historyRow');
+        const urlParams = new URLSearchParams(window.location.search);
+        const userId = urlParams.get('user_id');
+
+        let socket;
+        let gameState = "WAITING";
+        let myBet = 0;
+        let isBetting = false;
+        let currentMultiplier = 1.00;
+        let canvas, ctx, W, H;
 
         // Init
-        resize();
-        window.addEventListener('resize', resize);
-        updateUI();
-        generateFakePlayers(); // Populate list initially
+        initGame();
 
-        function resize() {
-            W = canvas.width = canvas.offsetWidth;
-            H = canvas.height = canvas.offsetHeight;
-        }
-
-        function updateUI() {
-            elBalance.innerText = balance.toFixed(2);
-            elBetVal.innerText = currentBet;
-        }
-
-        function changeBet(amount) {
-            if (gameState !== 'WAITING' || userBetPlaced) return;
-            let newBet = currentBet + amount;
-            if (newBet >= 50 && newBet <= balance) {
-                currentBet = newBet;
-                updateUI();
-                tg.HapticFeedback.selectionChanged();
-            }
-        }
-
-        // --- BUTTON LOGIC ---
-        function handleAction() {
-            tg.HapticFeedback.impactOccurred('light');
-
-            if (gameState === 'WAITING') {
-                if (!userBetPlaced) {
-                    // Place Bet
-                    if (balance < currentBet) return tg.showAlert("No money!");
-                    balance -= currentBet;
-                    userBetPlaced = true;
-                    updateUI();
-                    
-                    elBtn.className = 'main-btn btn-red';
-                    elBtn.innerText = 'Cancel Bet';
-                    
-                    // Add user to top of fake players list
-                    addSelfToPlayersList();
-                } else {
-                    // Cancel Bet
-                    balance += currentBet;
-                    userBetPlaced = false;
-                    updateUI();
-                    elBtn.className = 'main-btn btn-blue';
-                    elBtn.innerText = 'Place bet';
-                    removeSelfFromPlayers();
-                }
-            } 
-            else if (gameState === 'FLYING' && userBetPlaced) {
-                // Cash Out
-                doCashOut();
-            }
-        }
-
-        function doCashOut() {
-            const win = currentBet * multiplier;
-            balance += win;
-            userBetPlaced = false;
-            updateUI();
-            
-            elBtn.className = 'main-btn btn-disabled';
-            elBtn.innerText = `Won ${(win).toFixed(0)}!`;
-            elBtn.style.background = '#10b981'; // Green
-            
-            tg.HapticFeedback.notificationOccurred('success');
-            
-            // Send data to Bot (Optional sync)
-            sendDataToBot({ change: win - currentBet });
-        }
-
-        // --- GAME LOOP ---
-        
-        // Start cycle automatically if idle
-        setInterval(() => {
-            if (gameState === 'WAITING' && !animationId) {
-                startCountdown();
-            }
-        }, 3000); // 3 sec break between rounds
-
-        function startCountdown() {
-            gameState = 'COUNTDOWN';
-            if (userBetPlaced) {
-                elBtn.className = 'main-btn btn-disabled';
-                elBtn.innerText = 'Wait for start...';
-            } else {
-                elBtn.className = 'main-btn btn-disabled';
-                elBtn.innerText = 'Round starting...';
-            }
-
-            let count = 3;
-            runCountAnimation(3);
-            
-            const timer = setInterval(() => {
-                count--;
-                if(count > 0) runCountAnimation(count);
-                else {
-                    clearInterval(timer);
-                    startGame();
-                }
-            }, 1000);
-        }
-
-        function runCountAnimation(num) {
-            const el = document.getElementById(`cnt${num}`);
-            el.classList.remove('active');
-            void el.offsetWidth; // trigger reflow
-            el.classList.add('active');
-            tg.HapticFeedback.selectionChanged();
-        }
-
-        function startGame() {
-            gameState = 'FLYING';
-            multiplier = 1.00;
-            // Generate crash point (Simple logic)
-            crashPoint = (Math.random() * 0.99) ? (1 / (1 - Math.random())) : 1.00;
-            if (crashPoint > 10) crashPoint = 10; // Cap for demo
-            
-            elMulti.classList.add('visible');
-            elMulti.classList.remove('crashed');
-            
-            if (userBetPlaced) {
-                elBtn.className = 'main-btn btn-green';
-                elBtn.innerText = 'CASH OUT';
-                elBtn.style.background = ''; // Reset inline style
-            } else {
-                elBtn.innerText = 'Wait for next round';
-            }
-
-            animate();
-        }
-
-        function animate() {
-            if (gameState !== 'FLYING') return;
-
-            // Math logic
-            multiplier += 0.005 * multiplier + 0.001;
-            elMulti.innerText = multiplier.toFixed(2) + 'x';
-
-            // Cashout button update
-            if (userBetPlaced) {
-                 elBtn.innerText = `Cash Out (${(currentBet * multiplier).toFixed(0)})`;
-            }
-
-            // Check Crash
-            if (multiplier >= crashPoint) {
-                crash();
+        function initGame() {
+            if (SERVER_URL.includes("ВАШ_ДОМЕН")) {
+                alert("Ошибка! Вставь домен Bothost в index.html");
                 return;
             }
 
-            // Draw
-            drawScene(multiplier);
+            socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
 
-            animationId = requestAnimationFrame(animate);
-        }
-
-        function crash() {
-            gameState = 'CRASHED';
-            cancelAnimationFrame(animationId);
-            
-            elMulti.classList.add('crashed');
-            elBtn.className = 'main-btn btn-blue';
-            elBtn.innerText = 'Place bet';
-            
-            if (userBetPlaced) {
-                // User lost
-                userBetPlaced = false;
-                tg.HapticFeedback.notificationOccurred('error');
-            }
-
-            addHistory(crashPoint);
-            
-            // Send loss data if needed
-            // sendDataToBot(...)
-
-            setTimeout(() => {
-                resetGame();
-            }, 2000);
-        }
-
-        function resetGame() {
-            gameState = 'WAITING';
-            elMulti.classList.remove('visible');
-            ctx.clearRect(0, 0, W, H);
-            drawStars(); // Static BG
-            generateFakePlayers(); // New fake bets
-        }
-
-        // --- DRAWING ---
-        let stars = Array(50).fill().map(() => ({
-            x: Math.random() * 500, y: Math.random() * 300, size: Math.random() * 2, opacity: Math.random()
-        }));
-
-        function drawStars() {
-            ctx.fillStyle = "#1e1e24"; // Clear
-            ctx.fillRect(0,0,W,H);
-            
-            ctx.fillStyle = "white";
-            stars.forEach(s => {
-                ctx.globalAlpha = s.opacity;
-                ctx.beginPath();
-                ctx.arc(s.x, s.y, s.size, 0, Math.PI*2);
-                ctx.fill();
+            socket.on('connect', () => {
+                document.getElementById('connStatus').innerText = "🟢 Online";
+                // Авторизация
+                if(userId) socket.emit('auth', { user_id: userId });
             });
-            ctx.globalAlpha = 1;
+
+            socket.on('balance_update', (bal) => {
+                document.getElementById('balDisplay').innerText = bal;
+                tg.HapticFeedback.selectionChanged();
+            });
+
+            socket.on('game_update', (data) => {
+                gameState = data.status;
+                updateHistory(data.history);
+                updateUI();
+            });
+
+            socket.on('tick', (m) => {
+                currentMultiplier = m;
+                gameState = "FLYING";
+                drawRocket(m);
+                document.getElementById('mDisplay').innerText = m.toFixed(2) + "x";
+                
+                if (isBetting) {
+                    const win = Math.floor(myBet * m);
+                    document.getElementById('mainBtn').innerText = `CASHOUT (${win})`;
+                    document.getElementById('mainBtn').className = "btn btn-cashout";
+                }
+            });
+
+            socket.on('crash', (data) => {
+                gameState = "CRASHED";
+                currentMultiplier = data.multiplier;
+                document.getElementById('mDisplay').innerText = "CRASH " + data.multiplier.toFixed(2) + "x";
+                document.getElementById('mDisplay').classList.add('crashed');
+                isBetting = false; // Ставка сгорела
+                tg.HapticFeedback.notificationOccurred('error');
+                updateUI();
+            });
+
+            socket.on('bet_confirmed', (amount) => {
+                isBetting = true;
+                myBet = amount;
+                updateUI();
+            });
+
+            socket.on('win_notification', (amount) => {
+                isBetting = false;
+                tg.HapticFeedback.notificationOccurred('success');
+                alert(`YOU WON ${amount}!`);
+                updateUI();
+            });
+            
+            initCanvas();
         }
 
-        function drawScene(m) {
-            drawStars();
+        function action() {
+            if (gameState === "WAITING" && !isBetting) {
+                const amount = parseInt(document.getElementById('betInput').value);
+                socket.emit('place_bet', amount);
+            } else if (gameState === "FLYING" && isBetting) {
+                socket.emit('cash_out');
+            }
+        }
 
-            // Rocket position logic
-            // Curve goes from bottom-left to mid-right
-            let progress = (m - 1) / 4; 
-            if (progress > 1) progress = 1;
+        function updateUI() {
+            const btn = document.getElementById('mainBtn');
+            const status = document.getElementById('statusDisplay');
+            const mDisp = document.getElementById('mDisplay');
+
+            if (gameState === "WAITING") {
+                mDisp.classList.remove('crashed');
+                mDisp.innerText = "1.00x";
+                status.innerText = "Place your bets...";
+                drawRocket(1.0); // Reset canvas
+                
+                if (isBetting) {
+                    btn.className = "btn btn-wait";
+                    btn.innerText = "BET PLACED...";
+                } else {
+                    btn.className = "btn btn-bet";
+                    btn.innerText = "PLACE BET";
+                }
+            } else if (gameState === "CRASHED") {
+                btn.className = "btn btn-wait";
+                btn.innerText = "WAITING NEXT ROUND";
+                status.innerText = "Crashed!";
+            }
+        }
+
+        function updateHistory(hist) {
+            const div = document.getElementById('historyRow');
+            div.innerHTML = "";
+            hist.forEach(h => {
+                const badge = document.createElement('div');
+                badge.className = h >= 2.0 ? "badge green" : "badge red";
+                badge.innerText = h.toFixed(2) + "x";
+                div.appendChild(badge);
+            });
+        }
+
+        function adjBet(val) {
+            let el = document.getElementById('betInput');
+            let v = parseInt(el.value) + val;
+            if(v >= 50) el.value = v;
+        }
+
+        // --- GRAPHICS ---
+        function initCanvas() {
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            resize();
+            window.addEventListener('resize', resize);
+        }
+        function resize() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            W = canvas.width; H = canvas.height;
+        }
+        function drawRocket(m) {
+            ctx.clearRect(0, 0, W, H);
             
-            const startX = 20;
-            const startY = H - 20;
-            const endX = W - 50;
-            const endY = 50;
-
-            const curX = startX + (endX - startX) * progress;
-            // Bezier-like curve
-            const curY = startY - (startY - endY) * Math.sqrt(progress); 
-
-            // Draw Trail
+            // Grid
+            ctx.strokeStyle = "rgba(255,255,255,0.05)";
             ctx.beginPath();
-            ctx.moveTo(startX, startY);
-            ctx.quadraticCurveTo(startX + 50, startY, curX, curY);
-            ctx.strokeStyle = "#3b82f6";
-            ctx.lineWidth = 4;
-            ctx.lineCap = "round";
+            for(let i=0; i<W; i+=50) { ctx.moveTo(i,0); ctx.lineTo(i,H); }
             ctx.stroke();
 
-            // Draw Rocket
+            // Rocket Path
+            let progress = (m - 1) / 4; 
+            if(progress > 0.9) progress = 0.9;
+            
+            let x = 50 + (W - 100) * progress;
+            let y = (H - 50) - (H - 100) * progress;
+
+            ctx.beginPath();
+            ctx.strokeStyle = "#2ecc71";
+            ctx.lineWidth = 4;
+            ctx.moveTo(50, H-50);
+            ctx.quadraticCurveTo(x, H-50, x, y);
+            ctx.stroke();
+
+            // Rocket Icon
             ctx.save();
-            ctx.translate(curX, curY);
-            ctx.rotate(-Math.PI / 4); // Tilt
+            ctx.translate(x, y);
             ctx.font = "30px Arial";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(ROCKET_ICON, 0, 0);
+            ctx.fillText("🚀", -15, 10);
+            
+            // Particle Trail (Simple)
+            ctx.fillStyle = "orange";
+            ctx.beginPath();
+            ctx.arc(-20, 15, 5 + Math.random()*5, 0, Math.PI*2);
+            ctx.fill();
             ctx.restore();
         }
-
-        // --- FAKE PLAYERS LOGIC ---
-        const fakeNames = ["Alex", "CryptoKing", "Nodirbek", "SQU1RREL", "Lynn", "GHAEM", "Fleyzix", "User99"];
-        
-        function generateFakePlayers() {
-            const list = document.getElementById('playersList');
-            list.innerHTML = ''; // Clear
-            
-            const count = Math.floor(Math.random() * 5) + 3; // 3-8 players
-            for(let i=0; i<count; i++) {
-                const name = fakeNames[Math.floor(Math.random() * fakeNames.length)];
-                const bet = (Math.random() * 50 + 10).toFixed(2);
-                
-                const row = document.createElement('div');
-                row.className = 'player-row';
-                row.innerHTML = `
-                    <div class="player-info">
-                        <div class="avatar">${name[0]}</div>
-                        <span>${name}</span>
-                    </div>
-                    <div class="player-bet">
-                        💎 ${bet}
-                    </div>
-                `;
-                list.appendChild(row);
-            }
-        }
-
-        function addSelfToPlayersList() {
-            const list = document.getElementById('playersList');
-            const row = document.createElement('div');
-            row.className = 'player-row';
-            row.id = 'selfRow';
-            row.style.background = 'rgba(59, 130, 246, 0.1)'; // Highlight self
-            row.innerHTML = `
-                <div class="player-info">
-                    <div class="avatar" style="background:#3b82f6">YOU</div>
-                    <span>You</span>
-                </div>
-                <div class="player-bet">
-                    💎 ${currentBet}
-                </div>
-            `;
-            list.prepend(row);
-        }
-
-        function removeSelfFromPlayers() {
-            const row = document.getElementById('selfRow');
-            if(row) row.remove();
-        }
-
-        function addHistory(val) {
-            const div = document.createElement('div');
-            // Epic Gift style colors
-            let colorClass = 'badge'; 
-            if(val >= 10) colorClass += ' gold';
-            else if(val >= 2) colorClass += ' purple';
-            else colorClass += ' blue';
-
-            div.className = colorClass;
-            div.innerText = val.toFixed(2) + 'x';
-            
-            elHistory.prepend(div);
-            if(elHistory.children.length > 10) elHistory.lastChild.remove();
-        }
-
-        function sendDataToBot(data) {
-            // Placeholder for data sync
-            console.log("Send to bot:", data);
-        }
-
     </script>
 </body>
 </html>
