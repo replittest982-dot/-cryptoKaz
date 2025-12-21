@@ -157,5 +157,5 @@ async def on_startup(app):
 app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
-    # Bothost сам прокинет порт 8080 на внешний домен
-    web.run_app(app, port=8080)
+    # Хостинг прокидывает трафик через порт 3000 на твой домен
+    web.run_app(app, host="0.0.0.0", port=3000)
