@@ -8,45 +8,56 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
 
-# === НАСТРОЙКИ ===
-# Токен берется из переменных хостинга. Если нет - вставь свой вручную.
-TOKEN = os.getenv("BOT_TOKEN") 
-# Твоя ссылка на GitHub Pages
-WEB_APP_URL = "https://replittest982-dot.github.io/-cryptoKaz/"
+# === КОНФИГУРАЦИЯ (Берем из переменных Bothost) ===
+TOKEN = os.getenv("BOT_TOKEN")
+# Если переменная не задана, упадет с ошибкой (это безопасно)
+WEB_APP_URL = os.getenv("WEB_APP_URL", "https://replittest982-dot.github.io/-cryptoKaz/") 
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-# === БАЗА ДАННЫХ ===
+# === БАЗА ДАННЫХ (БЕЗОПАСНАЯ) ===
+DB_NAME = "casino.db"
+
 def init_db():
-    with sqlite3.connect("casino.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 balance INTEGER DEFAULT 1000
             )
         """)
-        conn.commit()
 
 def get_balance(user_id):
-    with sqlite3.connect("casino.db") as conn:
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         if result:
             return result[0]
-        # Если игрока нет, даем 1000 монет и регистрируем
-        cursor.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (user_id, 1000))
-        conn.commit()
+        # Регистрация нового юзера
+        conn.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (user_id, 1000))
         return 1000
 
-def update_balance(user_id, new_balance):
-    with sqlite3.connect("casino.db") as conn:
+# ИСПРАВЛЕНИЕ: Атомарное изменение баланса (защита от Race Condition)
+# Мы передаем не новый баланс, а "разницу" (выигрыш или проигрыш)
+def change_balance(user_id, amount):
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
-        conn.commit()
+        # Проверяем, чтобы баланс не ушел в минус (валидация на бэке)
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        current = cursor.fetchone()
+        
+        if current and (current[0] + amount < 0):
+            return False, current[0] # Недостаточно средств
+            
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        
+        # Возвращаем актуальный баланс после изменения
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        new_balance = cursor.fetchone()[0]
+        return True, new_balance
 
-# === БОТ ===
+# === ЛОГИКА БОТА ===
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -55,37 +66,49 @@ async def start(message: types.Message):
     user_id = message.from_user.id
     balance = get_balance(user_id)
     
-    # Мы передаем баланс прямо в ссылку, чтобы игра знала, сколько у нас денег
-    app_url = f"{WEB_APP_URL}?balance={balance}"
+    # Передаем баланс в URL для инициализации
+    app_url = f"{WEB_APP_URL}?start_balance={balance}"
     
-    kb = [
-        [KeyboardButton(text="🚀 ИГРАТЬ (CRASH)", web_app=WebAppInfo(url=app_url))]
-    ]
-    markup = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    kb = [[KeyboardButton(text="🚀 ИГРАТЬ В NEON CRASH", web_app=WebAppInfo(url=app_url))]]
     
     await message.answer(
-        f"👋 Привет, {message.from_user.first_name}!\n"
-        f"💰 Твой баланс: <b>{balance}</b> монет.\n\n"
-        f"⚠️ <b>ВАЖНО:</b> Чтобы сохранить выигрыш, нажимай кнопку 'СОХРАНИТЬ И ВЫЙТИ' внутри игры!",
-        reply_markup=markup,
+        f"🌌 <b>NEON CRASH CASINO</b>\n"
+        f"💳 Твой баланс: <code>{balance}</code> монет.\n"
+        f"Залетай и поднимай кэш! 👇",
+        reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True),
         parse_mode="HTML"
     )
 
+# Обработка данных из игры
 @dp.message(F.web_app_data)
-async def save_data(message: types.Message):
+async def handle_game_data(message: types.Message):
     try:
         data = json.loads(message.web_app_data.data)
-        # Получаем новый баланс из игры
-        if 'balance' in data:
-            new_balance = int(data['balance'])
-            update_balance(message.from_user.id, new_balance)
-            await message.answer(f"✅ Прогресс сохранен!\n💰 Текущий баланс: {new_balance}")
+        
+        # Валидация: Ожидаем поле 'change' (изменение баланса), а не абсолютное число
+        if 'change' in data:
+            change = int(data['change'])
+            
+            # Простая защита от накрутки (никто не может выиграть больше 100000 за раз)
+            if change > 100000: 
+                await message.answer("⚠️ Подозрительная активность. Ставка отменена.")
+                return
+
+            success, new_bal = change_balance(message.from_user.id, change)
+            
+            if success:
+                if change > 0:
+                    await message.answer(f"✅ Выигрыш зачислен!\nБаланс: {new_bal} (+{change})")
+                else:
+                    await message.answer(f"📉 Ставка списана.\nБаланс: {new_bal}")
+            else:
+                await message.answer("❌ Ошибка синхронизации баланса.")
+                
     except Exception as e:
-        logging.error(f"Ошибка сохранения: {e}")
+        logging.error(f"Error: {e}")
 
 async def main():
     init_db()
-    print("Бот запущен...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
