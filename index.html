@@ -2,64 +2,309 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Telegram Mini App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rocket Crash Game</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
-            /* Используем системные цвета Telegram для темной/светлой темы */
-            background-color: var(--tg-theme-bg-color);
-            color: var(--tg-theme-text-color);
-            font-family: sans-serif;
+            background-color: #0f1923;
+            color: white;
+            font-family: 'Roboto', sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
             height: 100vh;
             margin: 0;
+            overflow: hidden;
         }
-        button {
-            background-color: var(--tg-theme-button-color);
-            color: var(--tg-theme-button-text-color);
+
+        /* Верхняя панель */
+        .header {
+            width: 100%;
+            padding: 15px;
+            background: #1c252e;
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            box-sizing: border-box;
+        }
+        .balance { color: #2ecc71; font-size: 18px; }
+        
+        /* Игровое поле */
+        .game-area {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            position: relative;
+        }
+        
+        .rocket-container {
+            font-size: 80px;
+            transition: transform 0.1s;
+        }
+        
+        .multiplier {
+            font-size: 60px;
+            font-weight: 900;
+            margin-top: 20px;
+            color: white;
+        }
+        
+        .status-text {
+            color: #aaa;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+
+        /* Панель управления */
+        .controls {
+            width: 90%;
+            background: #1c252e;
+            padding: 20px;
+            border-radius: 20px 20px 0 0;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .bet-input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #0f1923;
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        input {
+            background: transparent;
             border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
+            color: white;
+            font-size: 20px;
+            width: 100px;
+            text-align: center;
         }
+
+        .btn {
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            transition: 0.2s;
+        }
+
+        .btn-play { background: #3498db; color: white; }
+        .btn-cashout { background: #e67e22; color: white; display: none; }
+        .btn-disabled { background: #555; color: #888; pointer-events: none; }
+
+        .history {
+            height: 30px;
+            display: flex;
+            gap: 10px;
+            overflow-x: auto;
+            width: 90%;
+            margin-bottom: 10px;
+        }
+        .badge {
+            background: #333;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        .crash-red { color: #e74c3c; }
     </style>
 </head>
 <body>
-    <h1>Привет, <span id="user-name">пользователь</span>!</h1>
-    <p>Это твое первое Mini App приложение.</p>
-    <button id="send-data-btn">Отправить данные боту</button>
+
+    <div class="header">
+        <span>Ракетка 🚀</span>
+        <span class="balance" id="balance">💰 1000</span>
+    </div>
+
+    <div class="history" id="history">
+        </div>
+
+    <div class="game-area">
+        <div class="rocket-container" id="rocket">🚀</div>
+        <div class="multiplier" id="display">0.00x</div>
+        <div class="status-text" id="status">Жду ставку...</div>
+    </div>
+
+    <div class="controls">
+        <div class="bet-input-group">
+            <button onclick="changeBet(-50)" style="background:none; border:none; color:white;">➖</button>
+            <input type="number" id="betAmount" value="100" readonly>
+            <button onclick="changeBet(50)" style="background:none; border:none; color:white;">➕</button>
+        </div>
+
+        <button id="mainBtn" class="btn btn-play" onclick="startGame()">СТАВКА</button>
+    </div>
 
     <script>
-        // Инициализация WebApp
         const tg = window.Telegram.WebApp;
-
-        // Расширяем приложение на все окно
         tg.expand();
 
-        // Подставляем имя пользователя из данных Telegram
-        const userName = document.getElementById('user-name');
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            userName.innerText = tg.initDataUnsafe.user.first_name;
+        // Переменные игры
+        let balance = 1000;
+        let currentBet = 100;
+        let multiplier = 1.00;
+        let isFlying = false;
+        let crashPoint = 0;
+        let timerInterval;
+        let flyInterval;
+        let countdown = 5;
+
+        // Элементы UI
+        const elBalance = document.getElementById('balance');
+        const elDisplay = document.getElementById('display');
+        const elRocket = document.getElementById('rocket');
+        const elStatus = document.getElementById('status');
+        const btn = document.getElementById('mainBtn');
+        const elBet = document.getElementById('betAmount');
+        const elHistory = document.getElementById('history');
+
+        // Обновление баланса
+        function updateBalance() {
+            elBalance.innerText = `💰 ${Math.floor(balance)}`;
         }
 
-        // Логика кнопки
-        const btn = document.getElementById('send-data-btn');
-        btn.addEventListener('click', () => {
-            const data = {
-                message: "Привет из Web App!",
-                timestamp: Date.now()
-            };
-            // Отправляем данные боту (работает только для кнопок типа KeyboardButton)
-            tg.sendData(JSON.stringify(data));
+        // Изменение ставки
+        function changeBet(amount) {
+            if (isFlying) return;
+            let newBet = currentBet + amount;
+            if (newBet >= 50 && newBet <= balance) {
+                currentBet = newBet;
+                elBet.value = currentBet;
+            }
+        }
+
+        // 1. НАЧАЛО: Таймер 5 секунд
+        function startGame() {
+            if (balance < currentBet) {
+                tg.showAlert("Недостаточно монет!");
+                return;
+            }
+
+            // Списываем ставку
+            balance -= currentBet;
+            updateBalance();
+
+            // Блокируем кнопку
+            btn.className = 'btn btn-disabled';
+            btn.innerText = 'ОЖИДАНИЕ...';
             
-            // Закрываем приложение
-            tg.close();
-        });
+            // Запуск обратного отсчета
+            countdown = 5;
+            elStatus.innerText = `Взлет через ${countdown} сек...`;
+            
+            timerInterval = setInterval(() => {
+                countdown--;
+                elStatus.innerText = `Взлет через ${countdown} сек...`;
+                
+                if (countdown <= 0) {
+                    clearInterval(timerInterval);
+                    startFlight();
+                }
+            }, 1000);
+        }
+
+        // 2. ПОЛЕТ
+        function startFlight() {
+            isFlying = true;
+            multiplier = 1.00;
+            
+            // Определяем, когда ракета упадет (случайно от 1.00 до 5.00)
+            // Шанс краша сразу (1.00) тоже есть!
+            crashPoint = (Math.random() * 4 + 1).toFixed(2); 
+            if (Math.random() < 0.3) crashPoint = (Math.random() * 1.5 + 1).toFixed(2); // 30% шанс низкого краша
+
+            elStatus.innerText = "РАКЕТА ЛЕТИТ!";
+            elRocket.style.transform = "translate(5px, -5px)"; // Легкая анимация
+
+            // Меняем кнопку на "ЗАБРАТЬ"
+            btn.className = 'btn btn-cashout';
+            btn.innerText = `ЗАБРАТЬ ${(currentBet * 1.0).toFixed(0)}`;
+            btn.onclick = cashOut;
+
+            // Цикл полета (быстрое обновление чисел)
+            flyInterval = setInterval(() => {
+                multiplier += 0.01;
+                elDisplay.innerText = multiplier.toFixed(2) + 'x';
+                btn.innerText = `ЗАБРАТЬ ${(currentBet * multiplier).toFixed(0)}`;
+
+                // Анимация тряски ракеты
+                elRocket.style.transform = `translate(${Math.random()*2}px, -${Math.random()*2}px) scale(1.1)`;
+
+                // ПРОВЕРКА НА КРАШ
+                if (multiplier >= crashPoint) {
+                    crash();
+                }
+            }, 50); // Скорость обновления (чем меньше число, тем быстрее летит)
+        }
+
+        // 3. ЗАБРАТЬ ДЕНЬГИ
+        function cashOut() {
+            if (!isFlying) return;
+            clearInterval(flyInterval);
+            isFlying = false;
+
+            let winAmount = Math.floor(currentBet * multiplier);
+            balance += winAmount;
+            updateBalance();
+
+            elStatus.innerText = `ВЫИГРЫШ: +${winAmount}`;
+            elStatus.style.color = '#2ecc71';
+            elDisplay.style.color = '#2ecc71';
+            
+            tg.HapticFeedback.notificationOccurred('success'); // Вибрация
+            
+            endRound(multiplier.toFixed(2));
+        }
+
+        // 4. ВЗРЫВ (Проигрыш)
+        function crash() {
+            clearInterval(flyInterval);
+            isFlying = false;
+            
+            elRocket.innerText = "💥"; // Меняем ракету на взрыв
+            elDisplay.style.color = "#e74c3c";
+            elStatus.innerText = "РАКЕТА РАЗБИЛАСЬ!";
+            elStatus.style.color = "#e74c3c";
+            
+            tg.HapticFeedback.notificationOccurred('error'); // Вибрация ошибки
+
+            endRound(crashPoint);
+        }
+
+        // Сброс раунда
+        function endRound(finalMulti) {
+            // Добавляем в историю
+            let badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.innerText = finalMulti + 'x';
+            if(finalMulti < 1.5) badge.classList.add('crash-red');
+            elHistory.prepend(badge);
+
+            // Возвращаем кнопку
+            setTimeout(() => {
+                elRocket.innerText = "🚀";
+                elRocket.style.transform = "none";
+                elDisplay.innerText = "0.00x";
+                elDisplay.style.color = "white";
+                elStatus.innerText = "Жду ставку...";
+                elStatus.style.color = "#aaa";
+
+                btn.className = 'btn btn-play';
+                btn.innerText = 'СТАВКА';
+                btn.onclick = startGame;
+            }, 3000); // Через 3 секунды можно снова играть
+        }
     </script>
 </body>
 </html>
