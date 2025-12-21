@@ -3,217 +3,225 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crypto Crash Live</title>
+    <title>Crypto Kaz Live</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background: #0f1923; color: white; font-family: sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        body { margin: 0; background: #0f1923; color: white; font-family: 'Arial', sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         
-        /* Game Area */
-        .game-wrapper {
+        /* Игровая зона */
+        .game-area {
             position: relative;
             flex-grow: 1;
-            background: radial-gradient(circle at bottom, #1c252e 0%, #000000 100%);
-            border-bottom: 2px solid #333;
+            background: radial-gradient(circle at bottom left, #1c252e, #000000);
+            border-bottom: 2px solid #2c3e50;
         }
         canvas { display: block; width: 100%; height: 100%; }
-
-        .center-info {
-            position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
+        
+        /* Текст по центру */
+        .center-hud {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
             text-align: center; pointer-events: none;
         }
-        .multiplier { font-size: 60px; font-weight: 900; text-shadow: 0 0 20px rgba(255,255,255,0.2); }
-        .crashed { color: #ff4757; text-shadow: 0 0 20px rgba(255, 71, 87, 0.5); }
-        .status { font-size: 20px; color: #aaa; margin-top: 10px; }
+        .multiplier { font-size: 64px; font-weight: 900; text-shadow: 0 0 25px rgba(46, 204, 113, 0.5); color: white; }
+        .crashed { color: #e74c3c; text-shadow: 0 0 25px rgba(231, 76, 60, 0.5); }
+        .status-text { font-size: 18px; color: #7f8c8d; margin-top: 5px; }
 
-        /* Controls */
+        /* Контролы */
         .controls { padding: 15px; background: #151e27; z-index: 10; }
         
-        .history { display: flex; gap: 5px; margin-bottom: 10px; overflow-x: auto; height: 30px; }
-        .badge { padding: 5px 10px; border-radius: 5px; background: #333; font-size: 12px; font-weight: bold; flex-shrink: 0; }
-        .badge.green { color: #2ecc71; background: rgba(46, 204, 113, 0.2); }
-        .badge.red { color: #ff4757; background: rgba(255, 71, 87, 0.2); }
+        /* История */
+        .history-bar { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 5px; height: 28px; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; flex-shrink: 0; background: #2c3e50; color: #bdc3c7; }
+        .badge.win { background: rgba(46, 204, 113, 0.2); color: #2ecc71; }
+        .badge.lose { background: rgba(231, 76, 60, 0.2); color: #e74c3c; }
 
-        .bet-panel { display: flex; gap: 10px; margin-bottom: 10px; }
-        .input-box { flex: 1; background: #0f1923; border: 1px solid #333; border-radius: 10px; color: white; padding: 10px; text-align: center; font-size: 18px; }
+        /* Ставки */
+        .bet-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .input-box { flex: 1; background: #0f1923; border: 1px solid #34495e; border-radius: 8px; color: white; padding: 12px; text-align: center; font-size: 18px; font-weight: bold; }
+        .adj-btn { width: 45px; height: 45px; background: #2c3e50; border: none; border-radius: 8px; color: white; font-size: 20px; font-weight: bold; }
         
-        .btn { width: 100%; padding: 18px; border-radius: 12px; border: none; font-size: 20px; font-weight: bold; cursor: pointer; color: white; transition: 0.1s; }
-        .btn-bet { background: #2ecc71; box-shadow: 0 4px 0 #27ae60; }
-        .btn-bet:active { transform: translateY(2px); box-shadow: none; }
-        .btn-cashout { background: #f39c12; box-shadow: 0 4px 0 #d35400; }
-        .btn-wait { background: #34495e; color: #7f8c8d; pointer-events: none; }
+        /* Главная кнопка */
+        .main-btn {
+            width: 100%; padding: 18px; border-radius: 12px; border: none;
+            font-size: 20px; font-weight: 900; color: white; transition: 0.1s;
+            text-transform: uppercase;
+        }
+        .btn-green { background: #27ae60; box-shadow: 0 4px 0 #219150; }
+        .btn-green:active { transform: translateY(2px); box-shadow: none; }
+        .btn-orange { background: #e67e22; box-shadow: 0 4px 0 #d35400; }
+        .btn-grey { background: #34495e; color: #7f8c8d; pointer-events: none; }
 
-        .balance { font-size: 14px; color: #2ecc71; margin-bottom: 5px; display: flex; justify-content: space-between; }
+        .top-info { display: flex; justify-content: space-between; font-size: 14px; color: #bdc3c7; margin-bottom: 5px; font-weight: bold; }
+        .balance-val { color: #2ecc71; }
     </style>
 </head>
 <body>
 
-    <div class="game-wrapper">
-        <canvas id="canvas"></canvas>
-        <div class="center-info">
-            <div id="mDisplay" class="multiplier">1.00x</div>
-            <div id="statusDisplay" class="status">Connecting...</div>
+    <div class="game-area">
+        <canvas id="gameCanvas"></canvas>
+        <div class="center-hud">
+            <div id="mText" class="multiplier">1.00x</div>
+            <div id="statusText" class="status-text">Connecting...</div>
         </div>
     </div>
 
     <div class="controls">
-        <div class="balance">
-            <span>BALANCE: <b id="balDisplay">0</b></span>
+        <div class="top-info">
+            <span>BALANCE: <span id="balanceText" class="balance-val">0</span></span>
             <span id="connStatus">🔴 Offline</span>
         </div>
-        
-        <div class="history" id="historyRow"></div>
 
-        <div class="bet-panel">
-            <button onclick="adjBet(-50)" style="background:#333; border:none; color:white; border-radius:5px; width:40px;">-</button>
+        <div class="history-bar" id="historyContainer"></div>
+
+        <div class="bet-row">
+            <button class="adj-btn" onclick="adjBet(-50)">-</button>
             <input type="number" id="betInput" class="input-box" value="100" readonly>
-            <button onclick="adjBet(50)" style="background:#333; border:none; color:white; border-radius:5px; width:40px;">+</button>
+            <button class="adj-btn" onclick="adjBet(50)">+</button>
         </div>
 
-        <button id="mainBtn" class="btn btn-wait" onclick="action()">LOADING...</button>
+        <button id="actionBtn" class="main-btn btn-grey" onclick="handleAction()">LOADING...</button>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // ==========================================================
-        // 🔴 ВСТАВЬ СЮДА СВОЙ ДОМЕН С BOTHOST (с https://)
-        // Пример: const SERVER_URL = "https://bot-12345.bothost.ru";
-        const SERVER_URL = "https://ВАШ_ДОМЕН_С_BOTHOST.ru"; 
-        // ==========================================================
+        // === ПОДКЛЮЧЕНИЕ К ТВОЕМУ ДОМЕНУ ===
+        const SERVER_URL = "https://kazcryptoscarface.com";
+        
+        const socket = io(SERVER_URL, { 
+            transports: ['websocket', 'polling'], // Принудительно сокеты
+            reconnection: true 
+        });
 
+        // Данные
         const urlParams = new URLSearchParams(window.location.search);
         const userId = urlParams.get('user_id');
-
-        let socket;
         let gameState = "WAITING";
-        let myBet = 0;
         let isBetting = false;
-        let currentMultiplier = 1.00;
+        let myBetAmount = 0;
         let canvas, ctx, W, H;
 
-        // Init
-        initGame();
+        // UI Элементы
+        const elM = document.getElementById('mText');
+        const elStatus = document.getElementById('statusText');
+        const elBtn = document.getElementById('actionBtn');
+        const elBal = document.getElementById('balanceText');
+        const elConn = document.getElementById('connStatus');
+        const elHist = document.getElementById('historyContainer');
 
-        function initGame() {
-            if (SERVER_URL.includes("ВАШ_ДОМЕН")) {
-                alert("Ошибка! Вставь домен Bothost в index.html");
-                return;
-            }
+        initCanvas();
 
-            socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
+        // === СОКЕТЫ ===
+        socket.on('connect', () => {
+            elConn.innerText = "🟢 Online";
+            if(userId) socket.emit('auth', { user_id: userId });
+        });
 
-            socket.on('connect', () => {
-                document.getElementById('connStatus').innerText = "🟢 Online";
-                // Авторизация
-                if(userId) socket.emit('auth', { user_id: userId });
-            });
+        socket.on('disconnect', () => {
+            elConn.innerText = "🔴 Offline";
+        });
 
-            socket.on('balance_update', (bal) => {
-                document.getElementById('balDisplay').innerText = bal;
-                tg.HapticFeedback.selectionChanged();
-            });
+        socket.on('balance', (bal) => {
+            elBal.innerText = bal;
+            tg.HapticFeedback.selectionChanged();
+        });
 
-            socket.on('game_update', (data) => {
-                gameState = data.status;
-                updateHistory(data.history);
-                updateUI();
-            });
+        socket.on('game_update', (data) => {
+            gameState = data.status;
+            renderHistory(data.history);
+            updateUI();
+        });
 
-            socket.on('tick', (m) => {
-                currentMultiplier = m;
-                gameState = "FLYING";
-                drawRocket(m);
-                document.getElementById('mDisplay').innerText = m.toFixed(2) + "x";
-                
-                if (isBetting) {
-                    const win = Math.floor(myBet * m);
-                    document.getElementById('mainBtn').innerText = `CASHOUT (${win})`;
-                    document.getElementById('mainBtn').className = "btn btn-cashout";
-                }
-            });
-
-            socket.on('crash', (data) => {
-                gameState = "CRASHED";
-                currentMultiplier = data.multiplier;
-                document.getElementById('mDisplay').innerText = "CRASH " + data.multiplier.toFixed(2) + "x";
-                document.getElementById('mDisplay').classList.add('crashed');
-                isBetting = false; // Ставка сгорела
-                tg.HapticFeedback.notificationOccurred('error');
-                updateUI();
-            });
-
-            socket.on('bet_confirmed', (amount) => {
-                isBetting = true;
-                myBet = amount;
-                updateUI();
-            });
-
-            socket.on('win_notification', (amount) => {
-                isBetting = false;
-                tg.HapticFeedback.notificationOccurred('success');
-                alert(`YOU WON ${amount}!`);
-                updateUI();
-            });
+        socket.on('tick', (m) => {
+            gameState = "FLYING";
+            elM.innerText = m.toFixed(2) + "x";
             
-            initCanvas();
-        }
+            if (isBetting) {
+                const win = Math.floor(myBetAmount * m);
+                elBtn.className = "main-btn btn-orange";
+                elBtn.innerText = `CASHOUT (${win})`;
+            }
+            
+            drawRocket(m);
+        });
 
-        function action() {
+        socket.on('crash', (data) => {
+            gameState = "CRASHED";
+            elM.innerText = "CRASH " + data.m.toFixed(2) + "x";
+            elM.classList.add("crashed");
+            
+            elBtn.className = "main-btn btn-grey";
+            elBtn.innerText = "ВЗОРВАЛСЯ";
+            
+            if(isBetting) {
+                tg.HapticFeedback.notificationOccurred('error');
+                isBetting = false;
+            }
+            updateUI();
+        });
+
+        socket.on('bet_ok', (amt) => {
+            isBetting = true;
+            myBetAmount = amt;
+            updateUI();
+        });
+
+        socket.on('win', (amt) => {
+            isBetting = false;
+            tg.HapticFeedback.notificationOccurred('success');
+            // Можно показать красивую анимацию тут
+            alert(`ПОБЕДА! +${amt}`);
+            updateUI();
+        });
+
+        // === ЛОГИКА ===
+        function handleAction() {
             if (gameState === "WAITING" && !isBetting) {
-                const amount = parseInt(document.getElementById('betInput').value);
-                socket.emit('place_bet', amount);
+                const val = parseInt(document.getElementById('betInput').value);
+                socket.emit('place_bet', val);
             } else if (gameState === "FLYING" && isBetting) {
                 socket.emit('cash_out');
             }
         }
 
         function updateUI() {
-            const btn = document.getElementById('mainBtn');
-            const status = document.getElementById('statusDisplay');
-            const mDisp = document.getElementById('mDisplay');
-
             if (gameState === "WAITING") {
-                mDisp.classList.remove('crashed');
-                mDisp.innerText = "1.00x";
-                status.innerText = "Place your bets...";
-                drawRocket(1.0); // Reset canvas
+                elM.classList.remove("crashed");
+                elM.innerText = "1.00x";
+                elStatus.innerText = "Прием ставок...";
+                drawRocket(1.0);
                 
                 if (isBetting) {
-                    btn.className = "btn btn-wait";
-                    btn.innerText = "BET PLACED...";
+                    elBtn.className = "main-btn btn-grey";
+                    elBtn.innerText = "СТАВКА ПРИНЯТА";
                 } else {
-                    btn.className = "btn btn-bet";
-                    btn.innerText = "PLACE BET";
+                    elBtn.className = "main-btn btn-green";
+                    elBtn.innerText = "ПОСТАВИТЬ";
                 }
-            } else if (gameState === "CRASHED") {
-                btn.className = "btn btn-wait";
-                btn.innerText = "WAITING NEXT ROUND";
-                status.innerText = "Crashed!";
             }
         }
 
-        function updateHistory(hist) {
-            const div = document.getElementById('historyRow');
-            div.innerHTML = "";
-            hist.forEach(h => {
-                const badge = document.createElement('div');
-                badge.className = h >= 2.0 ? "badge green" : "badge red";
-                badge.innerText = h.toFixed(2) + "x";
-                div.appendChild(badge);
+        function renderHistory(hist) {
+            elHist.innerHTML = "";
+            hist.forEach(val => {
+                const d = document.createElement('div');
+                d.className = val >= 2.0 ? "badge win" : "badge lose";
+                d.innerText = val.toFixed(2) + "x";
+                elHist.appendChild(d);
             });
         }
 
-        function adjBet(val) {
-            let el = document.getElementById('betInput');
-            let v = parseInt(el.value) + val;
-            if(v >= 50) el.value = v;
+        function adjBet(n) {
+            const el = document.getElementById('betInput');
+            let v = parseInt(el.value) + n;
+            if (v >= 50) el.value = v;
         }
 
-        // --- GRAPHICS ---
+        // === РИСОВАНИЕ ===
         function initCanvas() {
-            canvas = document.getElementById('canvas');
+            canvas = document.getElementById('gameCanvas');
             ctx = canvas.getContext('2d');
             resize();
             window.addEventListener('resize', resize);
@@ -223,39 +231,42 @@
             canvas.height = canvas.offsetHeight;
             W = canvas.width; H = canvas.height;
         }
+
         function drawRocket(m) {
             ctx.clearRect(0, 0, W, H);
             
-            // Grid
+            // Сетка
             ctx.strokeStyle = "rgba(255,255,255,0.05)";
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            for(let i=0; i<W; i+=50) { ctx.moveTo(i,0); ctx.lineTo(i,H); }
+            for(let i=0; i<W; i+=60) { ctx.moveTo(i,0); ctx.lineTo(i,H); }
+            for(let i=0; i<H; i+=60) { ctx.moveTo(0,i); ctx.lineTo(W,i); }
             ctx.stroke();
 
-            // Rocket Path
+            // Траектория
             let progress = (m - 1) / 4; 
-            if(progress > 0.9) progress = 0.9;
-            
-            let x = 50 + (W - 100) * progress;
-            let y = (H - 50) - (H - 100) * progress;
+            if (progress > 0.9) progress = 0.9;
 
-            ctx.beginPath();
+            let x = 40 + (W - 80) * progress;
+            let y = (H - 40) - (H - 80) * progress;
+
             ctx.strokeStyle = "#2ecc71";
             ctx.lineWidth = 4;
-            ctx.moveTo(50, H-50);
-            ctx.quadraticCurveTo(x, H-50, x, y);
+            ctx.beginPath();
+            ctx.moveTo(40, H-40);
+            ctx.quadraticCurveTo(x, H-40, x, y);
             ctx.stroke();
 
-            // Rocket Icon
+            // Ракета
             ctx.save();
             ctx.translate(x, y);
-            ctx.font = "30px Arial";
-            ctx.fillText("🚀", -15, 10);
+            ctx.font = "36px Arial";
+            ctx.fillText("🚀", -20, 10);
             
-            // Particle Trail (Simple)
-            ctx.fillStyle = "orange";
+            // Частицы
+            ctx.fillStyle = "rgba(230, 126, 34, 0.8)";
             ctx.beginPath();
-            ctx.arc(-20, 15, 5 + Math.random()*5, 0, Math.PI*2);
+            ctx.arc(-25, 15, 6 + Math.random()*4, 0, Math.PI*2);
             ctx.fill();
             ctx.restore();
         }
