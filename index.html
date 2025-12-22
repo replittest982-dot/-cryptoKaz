@@ -3,299 +3,354 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ScarFaceTeam</title>
+    <title>ScarFaceTeam Hub</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;900&display=swap" rel="stylesheet">
     <style>
         :root { 
             --bg: #050505; 
-            --card: #141414; 
-            --primary: #FFD700; 
-            --danger: #ff3b30;
-            --success: #34c759;
+            --card-bg: #141414; 
+            --gold: #FFD700; 
+            --gold-dim: #b39700;
+            --green: #2ecc71;
+            --red: #e74c3c;
             --text: #ffffff;
+            --gray: #7f8c8d;
         }
+        * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
         body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Montserrat', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         
         /* HEADER */
-        .header { padding: 15px; display: flex; justify-content: space-between; align-items: center; background: rgba(20,20,20,0.9); }
-        .logo { font-weight: 900; font-style: italic; font-size: 18px; }
-        .balance { background: #333; padding: 5px 12px; border-radius: 12px; font-weight: bold; color: var(--primary); }
+        .header { padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; background: rgba(20,20,20,0.95); backdrop-filter: blur(10px); z-index: 50; border-bottom: 1px solid #222; }
+        .logo { font-weight: 900; font-size: 18px; font-style: italic; letter-spacing: -0.5px; }
+        .logo span { color: var(--gold); }
+        .balance-pill { background: #222; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 14px; color: var(--gold); display: flex; gap: 5px; border: 1px solid #333; }
 
-        /* SCREENS */
-        .screen { display: none; flex: 1; flex-direction: column; overflow-y: auto; padding-bottom: 70px; }
+        /* SCREENS & NAVIGATION */
+        .screen { display: none; flex: 1; flex-direction: column; overflow-y: auto; padding-bottom: 80px; animation: fadeIn 0.3s ease; }
         .screen.active { display: flex; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* CRASH GAME */
-        .game-viz { position: relative; height: 280px; background: radial-gradient(circle at bottom, #2a2a2a 0%, #000 70%); }
-        #canvas { width: 100%; height: 100%; }
-        .multiplier { position: absolute; top: 40%; left: 50%; transform: translate(-50%,-50%); font-size: 64px; font-weight: 900; }
-        .multiplier.crash { color: var(--danger); }
+        .nav-bar { position: fixed; bottom: 0; width: 100%; height: 65px; background: #0f0f0f; border-top: 1px solid #222; display: flex; justify-content: space-around; align-items: center; z-index: 100; }
+        .nav-item { color: #555; font-size: 10px; font-weight: 700; text-align: center; cursor: pointer; transition: 0.2s; }
+        .nav-item.active { color: var(--gold); transform: translateY(-2px); }
+        .nav-icon { font-size: 22px; display: block; margin-bottom: 4px; }
+
+        /* === MENU (HOME) === */
+        .hero { padding: 20px; text-align: left; }
+        .hero h1 { margin: 0; font-size: 24px; font-weight: 900; color: white; }
+        .hero p { margin: 5px 0 0; font-size: 12px; color: var(--gray); }
+
+        .games-grid { display: grid; grid-template-columns: 1fr; gap: 15px; padding: 0 20px; }
+        .game-card { background: linear-gradient(145deg, #1a1a1a, #141414); border-radius: 16px; padding: 20px; position: relative; overflow: hidden; border: 1px solid #2a2a2a; cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: space-between; }
+        .game-card:active { transform: scale(0.98); }
+        .game-card.locked { opacity: 0.6; filter: grayscale(1); }
         
-        .controls { padding: 15px; background: var(--card); border-radius: 20px 20px 0 0; margin-top: -20px; z-index: 10; }
-        .main-btn { width: 100%; height: 55px; border: none; border-radius: 14px; font-size: 20px; font-weight: 800; cursor: pointer; transition: 0.1s; }
-        .btn-bet { background: var(--primary); color: #000; box-shadow: 0 4px 0 #b39700; }
-        .btn-cash { background: var(--success); color: #fff; box-shadow: 0 4px 0 #248a3d; }
-        .btn-dis { background: #333; color: #777; pointer-events: none; }
-        .btn-bet:active, .btn-cash:active { transform: translateY(4px); box-shadow: none; }
+        .gc-info h3 { margin: 0; font-size: 18px; font-weight: 800; }
+        .gc-info span { font-size: 12px; color: var(--gray); }
+        .gc-icon { font-size: 40px; }
+        .status-badge { position: absolute; top: 10px; right: 10px; font-size: 10px; background: #222; padding: 2px 6px; border-radius: 4px; color: var(--gray); }
 
-        .players-title { font-size: 12px; color: #777; margin: 15px 15px 5px; text-transform: uppercase; letter-spacing: 1px; }
-        .player-row { display: flex; justify-content: space-between; padding: 8px 15px; border-bottom: 1px solid #222; font-size: 14px; }
-        .win-amt { color: var(--success); font-weight: bold; }
+        /* === CRASH GAME === */
+        .game-wrapper { position: relative; height: 300px; background: radial-gradient(circle at 50% 100%, #1e1e1e 0%, #000 70%); }
+        #crashCanvas { width: 100%; height: 100%; }
+        .crash-overlay { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+        #multiplier { font-size: 64px; font-weight: 900; color: white; text-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #multiplier.crashed { color: var(--red); text-shadow: 0 0 20px rgba(231, 76, 60, 0.4); }
 
-        /* REFERRAL */
-        .ref-box { margin: 20px; padding: 20px; background: var(--card); border-radius: 16px; text-align: center; border: 1px solid #333; }
-        .ref-link-box { background: #000; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; color: var(--primary); word-break: break-all; margin: 10px 0; }
+        .bet-controls { background: var(--card-bg); padding: 20px; border-radius: 24px 24px 0 0; margin-top: -20px; position: relative; z-index: 10; border-top: 1px solid #222; }
+        
+        .input-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        .custom-input { flex: 1; background: #0a0a0a; border: 1px solid #333; border-radius: 12px; color: white; font-size: 18px; font-weight: 700; padding: 15px; text-align: center; outline: none; font-family: 'Montserrat'; }
+        .custom-input:focus { border-color: var(--gold); }
+        
+        .action-btn { width: 100%; height: 60px; border-radius: 14px; border: none; font-size: 20px; font-weight: 900; cursor: pointer; color: #000; transition: 0.2s; }
+        .btn-play { background: var(--gold); box-shadow: 0 4px 0 var(--gold-dim); }
+        .btn-out { background: var(--green); color: white; box-shadow: 0 4px 0 #27ae60; }
+        .btn-wait { background: #333; color: #777; pointer-events: none; }
+        .btn-play:active, .btn-out:active { transform: translateY(4px); box-shadow: none; }
 
-        /* NAV */
-        .nav { position: fixed; bottom: 0; width: 100%; height: 60px; background: #111; border-top: 1px solid #222; display: flex; justify-content: space-around; align-items: center; z-index: 100; }
-        .nav-item { color: #555; font-size: 10px; font-weight: bold; text-align: center; cursor: pointer; }
-        .nav-item.active { color: var(--primary); }
-        .icon { font-size: 20px; display: block; margin-bottom: 4px; }
+        .players-list { padding: 0 20px; margin-top: 10px; }
+        .p-row { display: flex; justify-content: space-between; font-size: 13px; padding: 8px 0; border-bottom: 1px solid #222; color: #ccc; }
+        
+        /* === REFERRAL === */
+        .ref-card { background: var(--card-bg); margin: 20px; padding: 30px 20px; border-radius: 20px; text-align: center; border: 1px solid #222; }
+        .ref-link { background: #000; padding: 15px; border-radius: 10px; font-family: monospace; color: var(--gold); word-break: break-all; margin: 20px 0; font-size: 12px; border: 1px dashed #333; }
 
-        /* DEBUG */
-        #debug-log { position: absolute; top:0; left:0; width:100%; background:rgba(255,0,0,0.8); color:white; font-size:10px; display:none; z-index:9999; padding:5px; }
+        /* LOADING */
+        #conn-loader { position: fixed; top:0; left:0; width:100%; height:100%; background: #000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
+        .spinner { width: 40px; height: 40px; border: 4px solid #333; border-top: 4px solid var(--gold); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div id="debug-log"></div>
+
+    <div id="conn-loader">
+        <div class="spinner"></div>
+        <div style="color: #666; font-size: 12px;">Connecting to ScarFace Server...</div>
+    </div>
 
     <div class="header">
-        <div class="logo">ScarFace<span style="color:var(--primary)">Team</span></div>
-        <div class="balance">💎 <span id="balance">...</span></div>
+        <div class="logo">ScarFace<span>Team</span></div>
+        <div class="balance-pill">💎 <span id="balance">...</span></div>
     </div>
 
-    <div id="home" class="screen active">
-        <div class="game-viz">
-            <canvas id="canvas"></canvas>
-            <div class="multiplier" id="multi">1.00x</div>
+    <div id="screen-hub" class="screen active">
+        <div class="hero">
+            <h1>Game Hub</h1>
+            <p>Choose your way to win</p>
         </div>
-        <div class="controls">
-            <div style="display:flex; justify-content:space-between; margin-bottom:10px; color:#aaa; font-size:12px;">
-                <span>Bet Amount</span>
-                <span>Max: 1000</span>
+        <div class="games-grid">
+            <div class="game-card" onclick="navTo('screen-crash')">
+                <div class="gc-info">
+                    <h3>Epic Crash</h3>
+                    <span style="color: var(--green)">● Live</span>
+                </div>
+                <div class="gc-icon">🚀</div>
             </div>
-            <div style="display:flex; gap:10px; margin-bottom:15px;">
-                <button onclick="adjBet(-50)" style="padding:10px; background:#222; color:white; border:none; border-radius:8px;">-50</button>
-                <div style="flex:1; background:#000; border-radius:8px; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:18px;" id="bet-val">100</div>
-                <button onclick="adjBet(50)" style="padding:10px; background:#222; color:white; border:none; border-radius:8px;">+50</button>
+            
+            <div class="game-card locked">
+                <div class="status-badge">SOON</div>
+                <div class="gc-info">
+                    <h3>Настолка</h3>
+                    <span>Board Game</span>
+                </div>
+                <div class="gc-icon">🎲</div>
             </div>
-            <button id="actionBtn" class="main-btn btn-bet" onclick="doAction()">BET</button>
-        </div>
-        
-        <div class="players-title">Live Players (Real Only)</div>
-        <div id="players-list"></div>
-    </div>
 
-    <div id="referral" class="screen">
-        <div class="ref-box">
-            <div style="font-size:40px; margin-bottom:10px;">🤝</div>
-            <h3>Invite Friends</h3>
-            <p style="color:#aaa; font-size:13px;">Earn <b>0.5%</b> from every deposit your friends make.</p>
-            <div class="ref-link-box" id="my-ref-link">Loading...</div>
-            <button onclick="copyRef()" style="background:var(--primary); border:none; padding:10px 20px; border-radius:8px; font-weight:bold; cursor:pointer;">COPY LINK</button>
+            <div class="game-card locked">
+                <div class="status-badge">DEV</div>
+                <div class="gc-info">
+                    <h3>Casino</h3>
+                    <span>Classic Slots</span>
+                </div>
+                <div class="gc-icon">🎰</div>
+            </div>
         </div>
     </div>
 
-    <div class="nav">
-        <div class="nav-item active" onclick="switchTab('home', this)">
-            <span class="icon">🏠</span> HOME
+    <div id="screen-crash" class="screen">
+        <div class="game-wrapper">
+            <canvas id="crashCanvas"></canvas>
+            <div class="crash-overlay">
+                <div id="multiplier">1.00x</div>
+                <div id="status-text" style="font-size: 12px; opacity: 0.5; margin-top: 5px;">WAITING</div>
+            </div>
+            <button onclick="navTo('screen-hub')" style="position:absolute; top:15px; left:15px; background:rgba(0,0,0,0.5); border:none; color:white; padding:8px 12px; border-radius:8px;">← Back</button>
         </div>
-        <div class="nav-item" onclick="switchTab('referral', this)">
-            <span class="icon">👥</span> REFERRAL
+
+        <div class="bet-controls">
+            <div class="input-row">
+                <button onclick="adjBet(-10)" style="background:#222; border:none; color:white; width:50px; border-radius:12px;">-</button>
+                <input type="number" id="betInput" class="custom-input" value="10.0" step="0.1" min="0.1">
+                <button onclick="adjBet(10)" style="background:#222; border:none; color:white; width:50px; border-radius:12px;">+</button>
+            </div>
+            <button id="actionBtn" class="action-btn btn-play" onclick="doAction()">BET</button>
+        </div>
+
+        <div class="players-list" id="playersList"></div>
+    </div>
+
+    <div id="screen-ref" class="screen">
+        <div class="ref-card">
+            <div style="font-size: 50px; margin-bottom: 10px;">💸</div>
+            <h2>Passive Income</h2>
+            <p style="color:#aaa; font-size:13px; line-height: 1.5;">
+                Invite friends and get <b style="color:var(--gold)">0.5%</b> of their deposits instantly to your balance.
+            </p>
+            <div class="ref-link" id="refLink">Loading link...</div>
+            <button class="action-btn btn-play" onclick="copyRef()">COPY LINK</button>
+        </div>
+    </div>
+
+    <div class="nav-bar">
+        <div class="nav-item active" onclick="navTo('screen-hub', this)">
+            <span class="nav-icon">🏠</span>Hub
+        </div>
+        <div class="nav-item" onclick="navTo('screen-ref', this)">
+            <span class="nav-icon">👥</span>Earn
         </div>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
-        
-        // 🔥 ВОТ ТВОЯ ССЫЛКА, УЖЕ ВСТАВЛЕНА 🔥
+
+        // ⚠️ ВАЖНО: Твой URL Bothost
         const SERVER_URL = "https://bot_1766306473_1270_metropabg189-gmail-c.bothost.ru"; 
         
-        // Получаем User ID
-        const urlParams = new URLSearchParams(window.location.search);
-        const userId = urlParams.get('user_id') || tg.initDataUnsafe?.user?.id;
+        // Polling исправляет "websocket error" на бесплатных тарифах Bothost
+        const socket = io(SERVER_URL, { transports: ['polling'] });
 
-        // DEBUG LOGGING
-        function log(msg) {
-            const el = document.getElementById('debug-log');
-            el.style.display = 'block';
-            el.innerText = msg;
-        }
+        // Logic
+        let user = { id: new URLSearchParams(window.location.search).get('user_id'), balance: 0 };
+        let game = { status: 'WAITING', m: 1.0, myBet: 0, inGame: false };
 
-        if (!userId) log("Warning: User ID not found. Open from Bot.");
-
-        // SOCKET
-        const socket = io(SERVER_URL, { 
-            transports: ['websocket', 'polling'], // Пробуем оба метода для надежности
-            reconnectionAttempts: 10
-        });
-
-        socket.on('connect_error', (err) => {
-            log("Ошибка подключения: " + err.message + " (" + SERVER_URL + ")");
-        });
-
-        // STATE
-        let state = { status: 'WAITING', m: 1.0, myBet: 0, inGame: false };
-        let currentBetAmt = 100;
-
-        // AUTH
+        // --- SOCKET HANDLERS ---
         socket.on('connect', () => {
-            document.getElementById('debug-log').style.display = 'none';
-            socket.emit('auth', { user_id: userId });
+            document.getElementById('conn-loader').style.opacity = '0';
+            setTimeout(() => document.getElementById('conn-loader').style.display = 'none', 500);
             
-            // Generate Ref Link (Замени YourBotName на имя бота, если нужно)
-            document.getElementById('my-ref-link').innerText = `https://t.me/YourBotName?start=${userId}`;
+            socket.emit('auth', { user_id: user.id });
+            document.getElementById('refLink').innerText = `https://t.me/YourBot_bot?start=${user.id}`;
         });
 
-        socket.on('balance', (b) => document.getElementById('balance').innerText = b);
-
-        socket.on('game_update', (d) => {
-            state.status = d.status;
-            renderPlayers(d.players);
-            if(state.status === 'WAITING') {
-                resetGameUI();
-            }
+        socket.on('balance', val => {
+            user.balance = val;
+            document.getElementById('balance').innerText = val.toFixed(1);
         });
 
-        socket.on('tick', (m) => {
-            state.status = 'FLYING';
-            state.m = m;
-            document.getElementById('multi').innerText = m.toFixed(2) + 'x';
+        socket.on('game_update', data => {
+            game.status = data.status;
+            renderPlayers(data.players || []);
+            if (game.status === 'WAITING') resetUI();
+        });
+
+        socket.on('tick', m => {
+            game.status = 'FLYING';
+            game.m = m;
+            document.getElementById('multiplier').innerText = m.toFixed(2) + 'x';
+            document.getElementById('multiplier').classList.remove('crashed');
+            document.getElementById('status-text').innerText = 'FLYING TO MOON';
             updateBtn();
-            drawRocket(m); // Рисуем каждый тик
+            drawRocket(m);
         });
 
-        socket.on('crash', (d) => {
-            state.status = 'CRASHED';
-            document.getElementById('multi').innerText = d.m.toFixed(2) + 'x';
-            document.getElementById('multi').classList.add('crash');
+        socket.on('crash', data => {
+            game.status = 'CRASHED';
+            document.getElementById('multiplier').innerText = data.m.toFixed(2) + 'x';
+            document.getElementById('multiplier').classList.add('crashed');
+            document.getElementById('status-text').innerText = 'CRASHED';
             tg.HapticFeedback.notificationOccurred('error');
             updateBtn();
         });
 
         socket.on('bet_ok', () => {
-            state.inGame = true;
-            state.myBet = currentBetAmt;
+            game.inGame = true;
+            game.myBet = parseFloat(document.getElementById('betInput').value);
             tg.HapticFeedback.impactOccurred('medium');
             updateBtn();
         });
 
         socket.on('win', (amt) => {
-            state.inGame = false;
+            game.inGame = false;
             tg.HapticFeedback.notificationOccurred('success');
+            // Show alert or toast? Nah, just visual update
             updateBtn();
         });
+        
+        socket.on('players_update', renderPlayers);
 
-        socket.on('players_update', (list) => {
-            renderPlayers(list);
-        });
-
-        // UI LOGIC
-        function switchTab(tab, el) {
+        // --- UI FUNCTIONS ---
+        function navTo(screenId, navEl) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-            document.getElementById(tab).classList.add('active');
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            el.classList.add('active');
+            document.getElementById(screenId).classList.add('active');
+            
+            if(navEl) {
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+                navEl.classList.add('active');
+            }
         }
 
-        function adjBet(val) {
-            currentBetAmt = Math.max(50, currentBetAmt + val);
-            document.getElementById('bet-val').innerText = currentBetAmt;
+        function adjBet(delta) {
+            let el = document.getElementById('betInput');
+            let val = parseFloat(el.value) || 0;
+            let newVal = Math.max(0.1, val + delta);
+            el.value = newVal.toFixed(1);
         }
 
         function doAction() {
-            if (state.status === 'WAITING' && !state.inGame) {
-                socket.emit('place_bet', currentBetAmt);
-            } else if (state.status === 'FLYING' && state.inGame) {
+            let val = parseFloat(document.getElementById('betInput').value);
+            
+            if (game.status === 'WAITING' && !game.inGame) {
+                if (val > 0.1 && val <= user.balance) {
+                    socket.emit('place_bet', val);
+                } else {
+                    tg.HapticFeedback.notificationOccurred('warning');
+                }
+            } else if (game.status === 'FLYING' && game.inGame) {
                 socket.emit('cash_out');
             }
         }
 
         function updateBtn() {
             const btn = document.getElementById('actionBtn');
-            if (state.status === 'WAITING') {
-                if (state.inGame) {
-                    btn.className = "main-btn btn-dis";
+            if (game.status === 'WAITING') {
+                if (game.inGame) {
+                    btn.className = "action-btn btn-wait";
                     btn.innerText = "BET PLACED";
                 } else {
-                    btn.className = "main-btn btn-bet";
-                    btn.innerText = "BET";
+                    btn.className = "action-btn btn-play";
+                    btn.innerText = "PLACE BET";
                 }
-            } else if (state.status === 'FLYING') {
-                if (state.inGame) {
-                    btn.className = "main-btn btn-cash";
-                    btn.innerText = `CASH OUT ${(state.myBet * state.m).toFixed(0)}`;
+            } else if (game.status === 'FLYING') {
+                if (game.inGame) {
+                    btn.className = "action-btn btn-out";
+                    btn.innerText = `CASH OUT ${(game.myBet * game.m).toFixed(1)}`;
                 } else {
-                    btn.className = "main-btn btn-dis";
-                    btn.innerText = "WAIT NEXT ROUND";
+                    btn.className = "action-btn btn-wait";
+                    btn.innerText = "ROUND IN PROGRESS";
                 }
             } else {
-                btn.className = "main-btn btn-dis";
+                btn.className = "action-btn btn-wait";
                 btn.innerText = "CRASHED";
             }
         }
 
-        function resetGameUI() {
-            state.inGame = false;
-            state.m = 1.0;
-            document.getElementById('multi').innerText = "1.00x";
-            document.getElementById('multi').classList.remove('crash');
+        function resetUI() {
+            game.inGame = false;
+            game.m = 1.0;
+            document.getElementById('multiplier').innerText = "1.00x";
+            document.getElementById('multiplier').classList.remove('crashed');
+            document.getElementById('status-text').innerText = "WAITING FOR BETS";
             updateBtn();
             ctx.clearRect(0,0,canvas.width,canvas.height);
         }
 
         function renderPlayers(list) {
-            const div = document.getElementById('players-list');
-            if(list.length === 0) {
-                div.innerHTML = '<div style="padding:15px; color:#444; text-align:center; font-size:12px;">Waiting for players...</div>';
-                return;
-            }
-            div.innerHTML = list.map(p => `
-                <div class="player-row">
-                    <div>${p.uid == userId ? '<b style="color:var(--primary)">YOU</b>' : 'User ' + p.uid}</div>
-                    <div>
-                        ${p.win > 0 
-                            ? `<span class="win-amt">+${p.win}</span>` 
-                            : `<span>${p.bet}</span>`}
-                    </div>
+            const container = document.getElementById('playersList');
+            container.innerHTML = list.map(p => `
+                <div class="p-row">
+                    <span>User ${p.uid}</span>
+                    <span style="color: ${p.win > 0 ? 'var(--green)' : 'white'}">
+                        ${p.win > 0 ? '+' + p.win.toFixed(1) : p.bet.toFixed(1)}
+                    </span>
                 </div>
             `).join('');
         }
 
         function copyRef() {
-            const text = document.getElementById('my-ref-link').innerText;
+            const text = document.getElementById('refLink').innerText;
             navigator.clipboard.writeText(text);
             tg.ShowPopup({message: "Link copied!"});
         }
 
-        // CANVAS ENGINE
-        const canvas = document.getElementById('canvas');
+        // --- CANVAS ROCKET ---
+        const canvas = document.getElementById('crashCanvas');
         const ctx = canvas.getContext('2d');
-        
         function resize() { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; }
         window.addEventListener('resize', resize); resize();
 
         function drawRocket(m) {
-            // Очищаем
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const w = canvas.width, h = canvas.height;
+            let p = Math.min((m - 1) / 4, 1); 
+            let x = 40 + (w - 80) * p;
+            let y = (h - 40) - (h - 80) * Math.sqrt(p);
             
-            // Кривая
-            let p = Math.min((m - 1) / 5, 1); 
-            let x = 30 + (w - 60) * p;
-            let y = (h - 30) - (h - 60) * Math.sqrt(p);
-            
+            // Trail
             ctx.beginPath();
-            ctx.strokeStyle = '#FFD700'; // Gold
+            ctx.strokeStyle = '#FFD700';
             ctx.lineWidth = 4;
-            ctx.moveTo(30, h-30);
-            ctx.quadraticCurveTo(w/2, h-30, x, y);
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#FFD700';
+            ctx.moveTo(40, h-40);
+            ctx.quadraticCurveTo(w/2, h-40, x, y);
             ctx.stroke();
+            ctx.shadowBlur = 0;
             
-            // Ракета
+            // Rocket
             ctx.font = "30px Arial";
             ctx.fillText("🚀", x-15, y);
         }
