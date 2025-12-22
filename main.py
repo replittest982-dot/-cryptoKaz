@@ -4,122 +4,126 @@ import random
 import sqlite3
 from aiohttp import web
 import socketio
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
-from aiogram.types import WebAppInfo, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
 
-# === НАСТРОЙКИ (ЗАПОЛНИ ЭТО) ===
+# === КОНФИГ ===
 TOKEN = os.getenv("BOT_TOKEN") 
-# Ссылка на твой GitHub Pages (где лежит index.html)
-WEB_APP_URL = "https://tvoj-github-username.github.io/repo-name/" 
+# Твой GitHub
+WEB_APP_URL = "https://replittest982-dot.github.io/-cryptoKaz/"
 
-# === СЕРВЕР ===
-# Настройка CORS для доступа с GitHub
+# === СЕРВЕР (Fix CORS) ===
 sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
 app = web.Application()
 sio.attach(app)
 
+# Фикс для проверки работоспособности
+async def index(request):
+    return web.Response(text="ScarFace Backend Online 🚀")
+app.router.add_get('/', index)
+
 # === БАЗА ДАННЫХ ===
-DB_NAME = "scarface.db"
+DB_NAME = "scarface_v2.db"
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
+        # Баланс храним как REAL для поддержки 0.1
         conn.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, 
-            balance INTEGER DEFAULT 0,
+            balance REAL DEFAULT 1000.0, 
             referrer_id INTEGER
         )""")
 
 def db_get_user(user_id, ref_id=None):
     with sqlite3.connect(DB_NAME) as conn:
-        user = conn.execute("SELECT balance, referrer_id FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        user = conn.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)).fetchone()
         if not user:
-            # Новый юзер + бонус 100 монет за регистрацию
-            conn.execute("INSERT INTO users (user_id, balance, referrer_id) VALUES (?, 100, ?)", (user_id, ref_id))
+            # Новичок получает 1000
+            conn.execute("INSERT INTO users (user_id, balance, referrer_id) VALUES (?, 1000.0, ?)", (user_id, ref_id))
             conn.commit()
-            return 100
+            return 1000.0
         return user[0]
 
-def db_add_balance(user_id, amount):
+def db_update_balance(user_id, amount):
     with sqlite3.connect(DB_NAME) as conn:
-        # Логика рефералки (0.5% при пополнении)
+        # Рефералка 0.5% (только при плюсе)
         if amount > 0:
             user = conn.execute("SELECT referrer_id FROM users WHERE user_id = ?", (user_id,)).fetchone()
-            if user and user[0]: # Если есть реферер
-                bonus = int(amount * 0.005) # 0.5%
-                if bonus > 0:
+            if user and user[0]:
+                bonus = round(amount * 0.005, 2)
+                if bonus > 0.01:
                     conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus, user[0]))
-                    print(f"💰 Реферер {user[0]} получил {bonus} за депозит {user_id}")
-
+        
+        # Обновляем баланс игрока
         conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         return conn.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)).fetchone()[0]
 
-# === ДВИЖОК CRASH ===
-game = {
-    "status": "WAITING", 
-    "m": 1.00, 
-    "history": [], 
-    "bets": {} # {sid: {uid, name, bet, win}}
-}
+# === CRASH LOGIC ===
+game = {"status": "WAITING", "m": 1.00, "history": [], "bets": {}}
 
 async def game_loop():
+    print("🔥 ENGINE STARTED")
     while True:
-        # 1. Ожидание
         game["status"] = "WAITING"
         game["m"] = 1.00
-        game["bets"] = {} # Очищаем игроков (нет фейков)
+        game["bets"] = {}
         await sio.emit('game_update', {"status": "WAITING", "history": game["history"], "players": []})
-        await asyncio.sleep(8)
+        await asyncio.sleep(8) 
 
-        # 2. Полет
         game["status"] = "FLYING"
-        crash_point = round(max(1.0, 0.96 / (1 - random.random())), 2) # RTP ~96%
-        print(f"🚀 Round starts. Crash at: {crash_point}x")
+        # RTP 97%
+        crash = round(max(1.0, 0.97 / (1 - random.random())), 2)
+        print(f"Next crash: {crash}x")
         
         start_time = asyncio.get_event_loop().time()
-        
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             current_m = round(1.0 * (1.06 ** (elapsed * 8)), 2)
             
-            if current_m >= crash_point:
-                game["m"] = crash_point
+            if current_m >= crash:
+                game["m"] = crash
                 break
             
             game["m"] = current_m
             await sio.emit('tick', current_m)
-            await asyncio.sleep(0.1) # 10 обновлений в секунду
+            await asyncio.sleep(0.1)
 
-        # 3. Краш
         game["status"] = "CRASHED"
-        game["history"].insert(0, crash_point)
-        game["history"] = game["history"][:8]
-        await sio.emit('crash', {"m": crash_point})
+        game["history"].insert(0, crash)
+        game["history"] = game["history"][:5]
+        await sio.emit('crash', {"m": crash})
         await asyncio.sleep(4)
 
-# === SOCKET IO ===
+# === SOCKETS ===
 @sio.on('auth')
 async def on_auth(sid, data):
-    uid = int(data.get('user_id'))
+    uid = int(data.get('user_id', 0))
     async with sio.session(sid) as session: session['uid'] = uid
     bal = db_get_user(uid)
-    await sio.emit('balance', bal, room=sid)
+    await sio.emit('balance', round(bal, 2), room=sid)
 
 @sio.on('place_bet')
 async def on_bet(sid, amount):
-    if game["status"] != "WAITING": return
+    try:
+        amount = float(amount)
+    except: return
+
+    if game["status"] != "WAITING" or amount < 0.1: return
+    
     async with sio.session(sid) as session:
         uid = session.get('uid')
-        current_bal = db_get_user(uid)
+        if not uid: return
         
-        if current_bal >= amount and amount > 0:
-            new_bal = db_add_balance(uid, -amount)
-            # Добавляем РЕАЛЬНОГО игрока
-            game["bets"][sid] = {"uid": uid, "name": f"Player {uid}", "bet": amount, "win": 0}
+        bal = db_get_user(uid)
+        if bal >= amount:
+            new_bal = db_update_balance(uid, -amount)
+            game["bets"][sid] = {"uid": uid, "bet": amount, "win": 0}
             
-            # Отправляем всем новый список
-            players_list = list(game["bets"].values())
-            await sio.emit('players_update', players_list)
-            await sio.emit('balance', new_bal, room=sid)
+            # Отправляем список (анонимизированный)
+            p_list = [{"uid": v["uid"], "bet": v["bet"], "win": v["win"]} for v in game["bets"].values()]
+            
+            await sio.emit('balance', round(new_bal, 2), room=sid)
+            await sio.emit('players_update', p_list)
             await sio.emit('bet_ok', room=sid)
 
 @sio.on('cash_out')
@@ -127,54 +131,32 @@ async def on_cashout(sid):
     if game["status"] != "FLYING": return
     if sid in game["bets"] and game["bets"][sid]["win"] == 0:
         bet_data = game["bets"][sid]
-        win_amt = int(bet_data["bet"] * game["m"])
+        win = round(bet_data["bet"] * game["m"], 2)
         
-        new_bal = db_add_balance(bet_data["uid"], win_amt)
-        game["bets"][sid]["win"] = win_amt # Помечаем выигрыш
+        new_bal = db_update_balance(bet_data["uid"], win)
+        game["bets"][sid]["win"] = win
         
-        await sio.emit('players_update', list(game["bets"].values()))
-        await sio.emit('balance', new_bal, room=sid)
-        await sio.emit('win', win_amt, room=sid)
+        p_list = [{"uid": v["uid"], "bet": v["bet"], "win": v["win"]} for v in game["bets"].values()]
+        await sio.emit('players_update', p_list)
+        await sio.emit('balance', round(new_bal, 2), room=sid)
+        await sio.emit('win', win, room=sid)
 
-# === TELEGRAM BOT ===
+# === BOT ===
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 @dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    # Обработка реферальной ссылки: t.me/Bot?start=123
-    args = message.text.split()
-    ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() and args[1] != str(message.from_user.id) else None
-    
-    db_get_user(message.from_user.id, ref_id) # Регистрация
-    
-    markup = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🕹 Play ScarFace", web_app=WebAppInfo(url=f"{WEB_APP_URL}?user_id={message.from_user.id}"))]
-    ], resize_keyboard=True)
-    
-    await message.answer(f"Добро пожаловать в <b>ScarFaceTeam</b>!\nТвой ID: <code>{message.from_user.id}</code>", 
-                         parse_mode="HTML", reply_markup=markup)
+async def start(msg: types.Message):
+    url = f"{WEB_APP_URL}?user_id={msg.from_user.id}"
+    kb = [[KeyboardButton(text="🕹 OPEN SCARFACE HUB", web_app=WebAppInfo(url=url))]]
+    await msg.answer("<b>ScarFace Team Hub</b>\nДоступ к играм открыт.", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True), parse_mode="HTML")
 
-# Команда админа для выдачи денег: /pay ID СУММА
-@dp.message(Command("pay"))
-async def admin_pay(message: types.Message):
-    try:
-        _, uid, amt = message.text.split()
-        db_add_balance(int(uid), int(amt))
-        await message.answer(f"✅ Выдано {amt} монет игроку {uid}")
-    except:
-        await message.answer("Ошибка. Пиши: /pay ID СУММА")
-
-async def main():
+async def on_startup(app):
     init_db()
     asyncio.create_task(game_loop())
     asyncio.create_task(dp.start_polling(bot))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 3000)
-    await site.start()
-    print("✅ ScarFace Server Running on port 3000")
-    await asyncio.Event().wait() # Keep alive
+
+app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(app, host="0.0.0.0", port=3000)
