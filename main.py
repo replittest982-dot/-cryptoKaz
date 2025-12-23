@@ -4,78 +4,79 @@ import os
 import random
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 )
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from dotenv import load_dotenv
 
 # --- КОНФИГУРАЦИЯ ---
-# Загружаем переменные (для локального теста через .env, на хостинге берется из настроек)
 load_dotenv()
-
-# Основные переменные
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Получаем ID админа и превращаем в число. Если не задан - будет 0 (никто не админ)
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-# Настройки БД и игр
-DB_NAME = "casino_pro.db"
+# Файл базы данных
+DB_NAME = "casino_v2.db"
+
+# Настройки Сапера
 MINES_COUNT = 3  
-BET_AMOUNT = 100 # Размер ставки (можно вынести в переменные)
+HOUSE_EDGE = 0.93 # 7% преимущества казино (уменьшает коэф)
 
-# Проверка токена
 if not BOT_TOKEN:
-    exit("Error: BOT_TOKEN variable is missing!")
+    exit("❌ Ошибка: Нет токена в переменных окружения!")
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 
-# --- БАЗА ДАННЫХ (Async SQLite) ---
+# --- МАШИНА СОСТОЯНИЙ (FSM) ---
+class UserState(StatesGroup):
+    waiting_for_bet = State() # Ждем ввода суммы ставки
+
+# --- БАЗА ДАННЫХ ---
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # Создаем таблицу пользователей
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                real_balance INTEGER DEFAULT 0,
-                demo_balance INTEGER DEFAULT 10000,
+                real_balance REAL DEFAULT 0.0,
+                demo_balance REAL DEFAULT 10000.0,
                 current_mode TEXT DEFAULT 'demo',
-                username TEXT
+                current_bet REAL DEFAULT 10.0
             )
         """)
         await db.commit()
 
-async def get_user_data(user_id, username=None):
+async def get_user(user_id):
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT real_balance, demo_balance, current_mode FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
-            if row:
-                # Если юзер есть, обновляем юзернейм (на случай смены)
-                if username:
-                    await db.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
-                    await db.commit()
-                return {"real": row[0], "demo": row[1], "mode": row[2]}
-            else:
-                # Регистрируем нового
-                await db.execute("INSERT INTO users (user_id, real_balance, demo_balance, current_mode, username) VALUES (?, ?, ?, ?, ?)", 
-                                 (user_id, 0, 10000, "demo", username))
+            if not row:
+                await db.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
                 await db.commit()
-                return {"real": 0, "demo": 10000, "mode": "demo"}
+                return {"user_id": user_id, "real": 0.0, "demo": 10000.0, "mode": "demo", "bet": 10.0}
+            return {
+                "user_id": row[0], "real": row[1], 
+                "demo": row[2], "mode": row[3], "bet": row[4]
+            }
 
 async def update_balance(user_id, amount, mode):
-    column = "real_balance" if mode == "real" else "demo_balance"
+    col = "real_balance" if mode == "real" else "demo_balance"
     async with aiosqlite.connect(DB_NAME) as db:
-        # Обновляем баланс
-        await db.execute(f"UPDATE users SET {column} = {column} + ? WHERE user_id = ?", (amount, user_id))
+        await db.execute(f"UPDATE users SET {col} = {col} + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
+
+async def set_bet(user_id, amount):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET current_bet = ? WHERE user_id = ?", (amount, user_id))
         await db.commit()
 
 async def toggle_mode(user_id):
-    data = await get_user_data(user_id)
-    new_mode = "real" if data['mode'] == "demo" else "demo"
+    user = await get_user(user_id)
+    new_mode = "real" if user['mode'] == "demo" else "demo"
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET current_mode = ? WHERE user_id = ?", (new_mode, user_id))
         await db.commit()
@@ -85,361 +86,373 @@ async def get_all_users_count():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
             row = await cursor.fetchone()
-            return row[0] if row else 0
+            return row[0]
 
-def format_balance(amount):
-    return f"{amount:,}".replace(",", ".")
+def fmt(num):
+    # Форматирование числа (убираем .0 если целое)
+    if num % 1 == 0:
+        return f"{int(num)}"
+    return f"{round(num, 2)}"
 
 # --- КЛАВИАТУРЫ ---
-def main_menu_kb(user_id, mode):
-    mode_text = "🟢 DEMO" if mode == "demo" else "🔴 REAL"
-    
-    # Основные кнопки
-    buttons = [
-        [InlineKeyboardButton(text="🎮 Игры Казино", callback_data="games_menu")],
-        [InlineKeyboardButton(text=f"🔄 Режим: {mode_text}", callback_data="switch_mode")],
+
+def main_kb(user_id, mode, bet):
+    mode_txt = "🟢 DEMO" if mode == "demo" else "🔴 REAL"
+    btns = [
+        [InlineKeyboardButton(text="🎮 Игры", callback_data="games_menu")],
+        [InlineKeyboardButton(text=f"💰 Ставка: {fmt(bet)}", callback_data="change_bet")],
+        [InlineKeyboardButton(text=f"🔄 Режим: {mode_txt}", callback_data="switch_mode")],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")]
     ]
-    
-    # Кнопка АДМИНА (видна только если ID совпадает)
     if user_id == ADMIN_ID:
-        buttons.append([InlineKeyboardButton(text="⚙️ Админ Панель", callback_data="admin_panel")])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+        btns.append([InlineKeyboardButton(text="⚙️ Админ", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=btns)
 
 def games_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💣 Сапер (Mines)", callback_data="game_mines_menu")],
-        [InlineKeyboardButton(text="🎲 Кубик", callback_data="game_dice")],
-        [InlineKeyboardButton(text="🏀 Баскет", callback_data="game_basket"), InlineKeyboardButton(text="⚽ Футбол", callback_data="game_foot")],
-        [InlineKeyboardButton(text="🎯 Дартс", callback_data="game_darts"), InlineKeyboardButton(text="🎳 Боулинг", callback_data="game_bowl")],
-        [InlineKeyboardButton(text="🎰 Слоты (777)", callback_data="game_slots")],
-        [InlineKeyboardButton(text="🔙 В меню", callback_data="main_menu")]
+        [InlineKeyboardButton(text="💣 Сапер", callback_data="game_mines_pre")],
+        [InlineKeyboardButton(text="🎲 Кубик", callback_data="pre_dice"), InlineKeyboardButton(text="🎰 Слоты", callback_data="pre_slots")],
+        [InlineKeyboardButton(text="🏀 Баскет", callback_data="pre_basket"), InlineKeyboardButton(text="⚽ Футбол", callback_data="pre_foot")],
+        [InlineKeyboardButton(text="🎯 Дартс", callback_data="pre_darts"), InlineKeyboardButton(text="🎳 Боулинг", callback_data="pre_bowl")],
+        [InlineKeyboardButton(text="🔙 Меню", callback_data="main_menu")]
     ])
 
-def dice_bet_kb():
+# Клавиатуры выбора исходов
+def dice_variants_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Больше 4 (x2.0)", callback_data="dice_over_4")],
-        [InlineKeyboardButton(text="Меньше 4 (x2.0)", callback_data="dice_under_4")],
-        [InlineKeyboardButton(text="Точное 5 или 6 (x2.5)", callback_data="dice_hard")], 
+        [InlineKeyboardButton(text="Больше 4 (5-6) | x2.9", callback_data="play_dice_over4")],
+        [InlineKeyboardButton(text="Меньше 4 (1-3) | x1.9", callback_data="play_dice_under4")],
+        [InlineKeyboardButton(text="Четное (2,4,6) | x1.9", callback_data="play_dice_even")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
     ])
 
-# --- ЛОГИКА СТАРТА И МЕНЮ ---
+def sport_variants_kb(sport_type):
+    # Для Футбола и Баскета
+    emoji = "⚽" if sport_type == "foot" else "🏀"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{emoji} Забьет (Гол) | x1.8", callback_data=f"play_{sport_type}_goal")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
+    ])
+
+def darts_variants_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔴 В яблочко (Центр) | x5.0", callback_data="play_darts_bull")],
+        [InlineKeyboardButton(text="🎯 Любое попадание | x1.3", callback_data="play_darts_hit")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
+    ])
+
+def slots_variants_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎰 Крутить Слот", callback_data="play_slots_spin")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
+    ])
+
+# --- ЛОГИКА МЕНЮ И СТАВОК ---
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    data = await get_user_data(user_id, username)
-    
-    text = (
-        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
-        f"Добро пожаловать в <b>Casino Bot Pro</b>.\n"
-        f"Твой баланс: <b>{format_balance(data['demo'] if data['mode'] == 'demo' else data['real'])}</b>\n\n"
-        f"<i>Выбери игру или смени режим ниже:</i>"
-    )
-    await message.answer(text, reply_markup=main_menu_kb(user_id, data['mode']), parse_mode="HTML")
+    user = await get_user(message.from_user.id)
+    txt = (f"👋 <b>Привет!</b>\nБаланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>\n"
+           f"Текущая ставка: <b>{fmt(user['bet'])}</b>")
+    await message.answer(txt, reply_markup=main_kb(user['user_id'], user['mode'], user['bet']), parse_mode="HTML")
 
 @dp.callback_query(F.data == "main_menu")
-async def cb_menu(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    data = await get_user_data(user_id)
-    try:
-        await callback.message.edit_text("🏠 Главное меню:", reply_markup=main_menu_kb(user_id, data['mode']))
-    except TelegramBadRequest:
-        # Если сообщение не изменилось
-        await callback.answer()
+async def cb_menu(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user = await get_user(cb.from_user.id)
+    await cb.message.edit_text("🏠 Главное меню:", reply_markup=main_kb(user['user_id'], user['mode'], user['bet']))
 
 @dp.callback_query(F.data == "switch_mode")
-async def cb_switch(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    new_mode = await toggle_mode(user_id)
-    # Обновляем клавиатуру с новым статусом
+async def cb_switch(cb: CallbackQuery):
+    await toggle_mode(cb.from_user.id)
+    user = await get_user(cb.from_user.id)
+    await cb.message.edit_reply_markup(reply_markup=main_kb(user['user_id'], user['mode'], user['bet']))
+
+@dp.callback_query(F.data == "change_bet")
+async def cb_change_bet(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("✍️ <b>Введите сумму ставки:</b>\n(Минимум 0.1)", parse_mode="HTML")
+    await state.set_state(UserState.waiting_for_bet)
+
+@dp.message(StateFilter(UserState.waiting_for_bet))
+async def process_bet_input(msg: Message, state: FSMContext):
     try:
-        await callback.message.edit_reply_markup(reply_markup=main_menu_kb(user_id, new_mode))
-        await callback.answer(f"Режим изменен на {new_mode.upper()}")
-    except TelegramBadRequest:
-        await callback.answer()
+        amount = float(msg.text.replace(",", "."))
+        if amount < 0.1:
+            await msg.answer("❌ Минимум 0.1")
+            return
+        await set_bet(msg.from_user.id, amount)
+        user = await get_user(msg.from_user.id)
+        await msg.answer(f"✅ Ставка изменена на: <b>{fmt(amount)}</b>", 
+                         reply_markup=main_kb(user['user_id'], user['mode'], amount), parse_mode="HTML")
+        await state.clear()
+    except ValueError:
+        await msg.answer("❌ Введите число (например 10 или 0.5)")
 
 @dp.callback_query(F.data == "profile")
-async def cb_profile(callback: CallbackQuery):
-    data = await get_user_data(callback.from_user.id)
-    text = (
-        f"👤 <b>Личный кабинет</b>\n\n"
-        f"🆔 ID: <code>{callback.from_user.id}</code>\n"
-        f"💳 Real Balance: <b>{format_balance(data['real'])}</b>\n"
-        f"🕹 Demo Balance: <b>{format_balance(data['demo'])}</b>\n"
-        f"⚙️ Текущий режим: <b>{data['mode'].upper()}</b>"
-    )
-    back_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]])
-    await callback.message.edit_text(text, reply_markup=back_btn, parse_mode="HTML")
-
-# --- АДМИН ПАНЕЛЬ ---
-@dp.callback_query(F.data == "admin_panel")
-async def cb_admin(callback: CallbackQuery):
-    # Двойная проверка безопасности
-    if callback.from_user.id != ADMIN_ID:
-        return await callback.answer("⛔ Доступ запрещен!", show_alert=True)
-    
-    users_count = await get_all_users_count()
-    
-    text = (
-        f"🔒 <b>Панель Администратора</b>\n\n"
-        f"👥 Всего пользователей: {users_count}\n"
-        f"✅ Бот активен и работает.\n"
-    )
-    
+async def cb_profile(cb: CallbackQuery):
+    user = await get_user(cb.from_user.id)
+    txt = (f"👤 <b>Профиль</b>\n🆔: <code>{user['user_id']}</code>\n"
+           f"💵 Real: <b>{fmt(user['real'])}</b>\n🕹 Demo: <b>{fmt(user['demo'])}</b>\n"
+           f"⚙️ Ставка: <b>{fmt(user['bet'])}</b>")
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 В меню", callback_data="main_menu")]
+        [InlineKeyboardButton(text="💰 Изменить ставку", callback_data="change_bet")],
+        [InlineKeyboardButton(text="🔙 Меню", callback_data="main_menu")]
     ])
-    
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
 
-# --- МЕНЮ ИГР ---
+# --- ПРЕД-МЕНЮ ИГР (ВЫБОР ИСХОДА) ---
+
 @dp.callback_query(F.data == "games_menu")
-async def cb_games(callback: CallbackQuery):
-    await callback.message.edit_text("🔥 Выбери игру:", reply_markup=games_kb())
+async def cb_games(cb: CallbackQuery):
+    await cb.message.edit_text("🔥 Выбери игру:", reply_markup=games_kb())
 
-# --- ЛОГИКА ДАЙСОВ, СЛОТОВ И СПОРТА ---
-async def check_balance(user_id, amount):
-    data = await get_user_data(user_id)
-    balance = data['demo'] if data['mode'] == 'demo' else data['real']
-    return (balance >= amount), data['mode']
+@dp.callback_query(F.data.startswith("pre_"))
+async def cb_pre_game(cb: CallbackQuery):
+    game = cb.data.split("_")[1]
+    if game == "dice":
+        await cb.message.edit_text("🎲 <b>Кубик:</b> Выбери исход", reply_markup=dice_variants_kb(), parse_mode="HTML")
+    elif game == "foot":
+        await cb.message.edit_text("⚽ <b>Футбол:</b> Выбери исход", reply_markup=sport_variants_kb("foot"), parse_mode="HTML")
+    elif game == "basket":
+        await cb.message.edit_text("🏀 <b>Баскет:</b> Выбери исход", reply_markup=sport_variants_kb("basket"), parse_mode="HTML")
+    elif game == "darts":
+        await cb.message.edit_text("🎯 <b>Дартс:</b> Выбери исход", reply_markup=darts_variants_kb(), parse_mode="HTML")
+    elif game == "slots":
+        await cb.message.edit_text("🎰 <b>Слоты 777:</b>", reply_markup=slots_variants_kb(), parse_mode="HTML")
+    elif game == "bowl":
+        # Боулинг простой, сразу запуск
+        await cb.message.answer("🎳 Запускаю боулинг...", reply_markup=None)
+        # Перенаправляем на логику игры
+        await run_game(cb, "bowl", "strike") 
 
-@dp.callback_query(F.data.startswith("dice_") | F.data.startswith("game_") & (F.data != "game_mines_menu"))
-async def process_dice_games(callback: CallbackQuery):
-    if "mines" in callback.data: return 
-    
-    user_id = callback.from_user.id
-    can_play, mode = await check_balance(user_id, BET_AMOUNT)
-    
-    if not can_play: 
-        return await callback.answer(f"Недостаточно средств на {mode.upper()}!", show_alert=True)
+# --- ЛОГИКА ЗАПУСКА ИГР ---
 
-    # Списываем ставку
-    await update_balance(user_id, -BET_AMOUNT, mode)
-    
-    game_type = callback.data
-    
-    # Настройки игр
-    config = {
-        "game_basket": ("🏀", "Баскетбол"), 
-        "game_foot": ("⚽", "Футбол"),
-        "game_darts": ("🎯", "Дартс"), 
-        "game_bowl": ("🎳", "Боулинг"),
-        "game_slots": ("🎰", "Слоты"), 
-        "game_dice": ("🎲", "Кубик")
+@dp.callback_query(F.data.startswith("play_"))
+async def cb_play_game(cb: CallbackQuery):
+    # data format: play_gameType_variant
+    parts = cb.data.split("_") # ['play', 'dice', 'over4']
+    game_type = parts[1]
+    variant = parts[2]
+    await run_game(cb, game_type, variant)
+
+async def run_game(cb: CallbackQuery, game, variant):
+    user_id = cb.from_user.id
+    user = await get_user(user_id)
+    bet = user['bet']
+    balance = user['demo'] if user['mode'] == 'demo' else user['real']
+
+    if balance < bet:
+        return await cb.answer("❌ Недостаточно средств!", show_alert=True)
+
+    # Списываем
+    await update_balance(user_id, -bet, user['mode'])
+
+    emoji_map = {
+        "dice": "🎲", "foot": "⚽", "basket": "🏀", 
+        "darts": "🎯", "bowl": "🎳", "slots": "🎰"
     }
-    
-    # Если это ставка внутри Dice (больше/меньше), ставим эмодзи кубика
-    emoji = "🎲"
-    name = "Кубик"
-    if game_type in config:
-        emoji, name = config[game_type]
-    
-    await callback.message.answer(f"🎲 Ставка принята: {BET_AMOUNT} ({mode.upper()})...")
-    msg = await callback.message.answer_dice(emoji=emoji)
+    emoji = emoji_map.get(game, "🎲")
+
+    await cb.message.answer(f"{emoji} Ставка: <b>{fmt(bet)}</b> на исход...", parse_mode="HTML")
+    msg = await cb.message.answer_dice(emoji=emoji)
     val = msg.dice.value
-    
-    # Ждем анимацию
-    await asyncio.sleep(3.5)
+    await asyncio.sleep(3.5) # Ждем анимацию
 
     win = False
-    coeff = 0
+    coeff = 0.0
+
+    # --- ЛОГИКА ПОБЕД ---
+    # 🎲 КУБИК
+    if game == "dice":
+        if variant == "over4": # > 4 (5, 6)
+            if val > 4: win = True; coeff = 2.9
+        elif variant == "under4": # < 4 (1, 2, 3)
+            if val < 4: win = True; coeff = 1.9
+        elif variant == "even": # Четное (2,4,6)
+            if val % 2 == 0: win = True; coeff = 1.9
     
-    # Логика расчета
-    if emoji == "🎰":
-        if val == 64: coeff, win = 5, True # Три семерки
-        elif val in [1, 22, 43]: coeff, win = 3, True # Три винограда/бара
-        elif val in [16, 32, 48]: coeff, win = 2, True # Две штуки
-    elif emoji == "🏀" and val in [4, 5]: coeff, win = 2, True
-    elif emoji == "⚽" and val in [3, 4, 5]: coeff, win = 2, True
-    elif emoji in ["🎯", "🎳"] and val == 6: coeff, win = 3, True
-    elif emoji == "🎲":
-        # Логика для ставок больше/меньше
-        if "over_4" in game_type and val > 4: coeff, win = 2, True
-        elif "under_4" in game_type and val < 4: coeff, win = 2, True
-        elif "hard" in game_type and val in [5, 6]: coeff, win = 2.5, True
-        elif game_type == "game_dice":
-             # Если просто нажали "Кубик" без выбора стратегии - считаем победой 4,5,6 (простой режим)
-             if val >= 4: coeff, win = 2, True
+    # ⚽🏀 СПОРТ (Telegram: 1,2=промах, 3,4,5=гол)
+    elif game in ["foot", "basket"]:
+        is_goal = val >= 3
+        if variant == "goal" and is_goal: win = True; coeff = 1.8
+    
+    # 🎯 ДАРТС (6=центр)
+    elif game == "darts":
+        if variant == "bull" and val == 6: win = True; coeff = 5.0
+        elif variant == "hit" and val > 1: win = True; coeff = 1.3 # 1 это промах обычно
+    
+    # 🎰 СЛОТЫ
+    elif game == "slots":
+        # 64=777, 1/22/43=ягоды/бары
+        if val == 64: win = True; coeff = 10.0 # ДЖЕКПОТ
+        elif val in [1, 22, 43]: win = True; coeff = 3.0
+        elif val in [16, 32, 48]: win = True; coeff = 1.5
 
+    # 🎳 БОУЛИНГ (6=страйк)
+    elif game == "bowl":
+        if val == 6: win = True; coeff = 5.0
+        elif val >= 4: win = True; coeff = 1.5 # Сбил почти все
+
+    # ИТОГ
     if win:
-        win_sum = int(BET_AMOUNT * coeff)
-        await update_balance(user_id, win_sum, mode)
-        res_text = f"✅ <b>Победа!</b> (+{win_sum})"
+        payout = bet * coeff
+        await update_balance(user_id, payout, user['mode'])
+        res_txt = f"✅ <b>ПОБЕДА!</b> (+{fmt(payout)})"
     else:
-        res_text = "❌ <b>Проигрыш.</b>"
+        res_txt = "❌ <b>Проигрыш</b>"
 
-    # Клавиатура возврата
-    if emoji == "🎲" and "game_dice" in game_type:
-        kb = dice_bet_kb() # Если играем в дайсы - даем выбрать ставку
-    else:
-        # Кнопка "Играть снова"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Играть снова", callback_data=game_type)],
-            [InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")]
-        ])
+    # Кнопка "Играть снова" с тем же исходом
+    retry_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Еще раз", callback_data=cb.data)],
+        [InlineKeyboardButton(text="🔙 Меню игр", callback_data="games_menu")]
+    ])
+    
+    await cb.message.answer(f"Результат: {val}\n{res_txt}", reply_markup=retry_kb, parse_mode="HTML")
 
-    await callback.message.answer(
-        f"{name} | Результат: {val}\n{res_text}", 
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
-
-# --- ИГРА MINES (САПЕР) ---
-# Хранение сессий в памяти (словарь)
+# --- САПЕР (MINES) ---
 mines_sessions = {}
 
 def get_mines_coeff(steps):
-    # Простая прогрессия коэффициентов
-    # 1 шаг - 1.13, 2 шаг - 1.29 и т.д.
+    # Формула с House Edge (чтобы не было слишком легко)
+    # Шанс победы = (Всего - Мины - Шаги) / (Всего - Шаги)
+    # Коэф = (1 / Шанс) * (1 - HOUSE_EDGE)
     curr = 1.0
-    for i in range(steps):
-        curr *= (25 - i) / (25 - MINES_COUNT - i)
+    remaining_cells = 25
+    remaining_safe = 25 - MINES_COUNT
+    
+    for _ in range(steps):
+        chance = remaining_safe / remaining_cells
+        fair_coeff = 1 / chance
+        curr *= fair_coeff
+        # Применяем комиссию на каждом шаге
+        curr *= HOUSE_EDGE 
+        
+        remaining_cells -= 1
+        remaining_safe -= 1
+        
     return round(curr, 2)
 
-def mines_field_kb(game_data, revealed=False):
-    keyboard = []
+def mines_kb(game_data, revealed=False):
+    kb = []
     grid = game_data['grid']
     opens = game_data['opens']
     
     for r in range(5):
-        row_btns = []
+        row = []
         for c in range(5):
-            idx = r * 5 + c
-            
-            # Логика отображения кнопок
-            text = "⬜️"
-            cb_data = f"m_step_{idx}"
+            idx = r*5 + c
+            txt = "⬜" # Закрыто
+            cb = f"m_step_{idx}"
             
             if idx in opens:
-                text = "💎"
-                cb_data = "ignore"
+                txt = "💎"
+                cb = "ignore"
             elif revealed:
-                if grid[idx] == 1: text, cb_data = "💣", "ignore"
-                else: text, cb_data = "🔹", "ignore"
+                if grid[idx] == 1: txt, cb = "💣", "ignore"
+                else: txt, cb = "▪️", "ignore" # Пустые при проигрыше затемняем
             
-            row_btns.append(InlineKeyboardButton(text=text, callback_data=cb_data))
-        keyboard.append(row_btns)
+            row.append(InlineKeyboardButton(text=txt, callback_data=cb))
+        kb.append(row)
     
-    # Кнопки управления
     if not revealed:
-        if len(opens) > 0:
-            coeff = get_mines_coeff(len(opens))
-            win_amount = int(BET_AMOUNT * coeff)
-            keyboard.append([InlineKeyboardButton(text=f"💰 ЗАБРАТЬ: {win_amount} ({coeff}x)", callback_data="m_cashout")])
+        steps = len(opens)
+        if steps > 0:
+            coeff = get_mines_coeff(steps)
+            win = game_data['bet'] * coeff
+            kb.append([InlineKeyboardButton(text=f"💰 ЗАБРАТЬ: {fmt(win)} (x{coeff})", callback_data="m_cash")])
     else:
-        keyboard.append([InlineKeyboardButton(text="🔄 Играть снова", callback_data="m_start")])
-        keyboard.append([InlineKeyboardButton(text="🔙 Меню игр", callback_data="games_menu")])
-        
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+        kb.append([InlineKeyboardButton(text="🔄 Заново", callback_data="game_mines_pre")])
+        kb.append([InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
-@dp.callback_query(F.data == "game_mines_menu")
-async def m_menu(callback: CallbackQuery):
-    await callback.message.edit_text(
-        f"💣 <b>Mines (Сапер)</b>\n"
-        f"Найди алмазы и не взорвись на мине.\n"
-        f"Ставка: {BET_AMOUNT}", 
+@dp.callback_query(F.data == "game_mines_pre")
+async def m_pre(cb: CallbackQuery):
+    user = await get_user(cb.from_user.id)
+    await cb.message.edit_text(
+        f"💣 <b>Сапер PRO</b>\n"
+        f"Поле: 5x5 | Мины: {MINES_COUNT}\n"
+        f"Ставка: <b>{fmt(user['bet'])}</b>\n\n"
+        f"<i>Чем больше открыл - тем больше выигрыш!</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 НАЧАТЬ ИГРУ", callback_data="m_start")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
-        ]), 
-        parse_mode="HTML"
+        ]), parse_mode="HTML"
     )
 
 @dp.callback_query(F.data == "m_start")
-async def m_start(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    can, mode = await check_balance(user_id, BET_AMOUNT)
+async def m_start(cb: CallbackQuery):
+    user = await get_user(cb.from_user.id)
+    bet = user['bet']
+    bal = user['demo'] if user['mode'] == 'demo' else user['real']
     
-    if not can: 
-        return await callback.answer("Недостаточно средств!", show_alert=True)
-        
-    await update_balance(user_id, -BET_AMOUNT, mode)
+    if bal < bet: return await cb.answer("❌ Нет денег!", show_alert=True)
+    await update_balance(cb.from_user.id, -bet, user['mode'])
     
-    # Генерация поля
+    # Генерация
     grid = [0]*25
-    bomb_indices = random.sample(range(25), MINES_COUNT)
-    for i in bomb_indices: 
-        grid[i] = 1
-        
-    mines_sessions[user_id] = {
-        "grid": grid, 
-        "opens": [], 
-        "active": True, 
-        "mode": mode
+    for i in random.sample(range(25), MINES_COUNT): grid[i] = 1
+    
+    mines_sessions[cb.from_user.id] = {
+        "grid": grid, "opens": [], "active": True, 
+        "mode": user['mode'], "bet": bet
     }
     
-    await callback.message.edit_text(
-        "💣 <b>Mines</b>: Поле сгенерировано. Ходи!", 
-        reply_markup=mines_field_kb(mines_sessions[user_id]),
-        parse_mode="HTML"
-    )
+    await cb.message.edit_text("💣 <b>Сапер</b>: Выбери ячейку", 
+        reply_markup=mines_kb(mines_sessions[cb.from_user.id]), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("m_step_"))
-async def m_step(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    if user_id not in mines_sessions or not mines_sessions[user_id]['active']: 
-        return await callback.answer("Сессия истекла, начни новую игру.")
-        
-    idx = int(callback.data.split("_")[2])
-    session = mines_sessions[user_id]
+async def m_step(cb: CallbackQuery):
+    uid = cb.from_user.id
+    if uid not in mines_sessions or not mines_sessions[uid]['active']:
+        return await cb.answer("Игра окончена")
     
-    if session['grid'][idx] == 1:
-        # Взрыв
-        session['active'] = False
-        await callback.message.edit_text(
-            "💥 <b>БАБАХ!</b> Ты наступил на мину.", 
-            reply_markup=mines_field_kb(session, revealed=True),
-            parse_mode="HTML"
-        )
+    idx = int(cb.data.split("_")[2])
+    sess = mines_sessions[uid]
+    
+    if sess['grid'][idx] == 1:
+        sess['active'] = False
+        await cb.message.edit_text("💥 <b>БАБАХ!</b> Ты проиграл.", 
+            reply_markup=mines_kb(sess, True), parse_mode="HTML")
     else:
-        # Успех
-        if idx not in session['opens']:
-            session['opens'].append(idx)
-        
-        coeff = get_mines_coeff(len(session['opens']))
-        await callback.message.edit_text(
-            f"💎 <b>Чисто!</b> Коэф: x{coeff}", 
-            reply_markup=mines_field_kb(session),
-            parse_mode="HTML"
-        )
+        if idx not in sess['opens']: sess['opens'].append(idx)
+        coeff = get_mines_coeff(len(sess['opens']))
+        win = sess['bet'] * coeff
+        await cb.message.edit_text(f"💎 Открыто: {len(sess['opens'])} | Выигрыш: <b>{fmt(win)}</b> (x{coeff})", 
+            reply_markup=mines_kb(sess), parse_mode="HTML")
 
-@dp.callback_query(F.data == "m_cashout")
-async def m_cash(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    session = mines_sessions.get(user_id)
+@dp.callback_query(F.data == "m_cash")
+async def m_cash(cb: CallbackQuery):
+    uid = cb.from_user.id
+    sess = mines_sessions.get(uid)
+    if not sess or not sess['active']: return
     
-    if not session or not session['active']: return
+    coeff = get_mines_coeff(len(sess['opens']))
+    win = sess['bet'] * coeff
+    sess['active'] = False
     
-    coeff = get_mines_coeff(len(session['opens']))
-    win_sum = int(BET_AMOUNT * coeff)
-    
-    session['active'] = False
-    await update_balance(user_id, win_sum, session['mode'])
-    
-    await callback.message.edit_text(
-        f"💰 <b>Вы забрали выигрыш!</b>\n+{win_sum} фишек", 
-        reply_markup=mines_field_kb(session, revealed=True),
-        parse_mode="HTML"
-    )
-    
+    await update_balance(uid, win, sess['mode'])
+    await cb.message.edit_text(f"💰 <b>Вы забрали {fmt(win)}!</b>\nКоэффициент: x{coeff}", 
+        reply_markup=mines_kb(sess, True), parse_mode="HTML")
+
 @dp.callback_query(F.data == "ignore")
-async def ignore_click(callback: CallbackQuery):
-    await callback.answer()
+async def ignore(cb: CallbackQuery):
+    await cb.answer()
+
+@dp.callback_query(F.data == "admin_panel")
+async def admin(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN_ID: return await cb.answer("Запрещено")
+    count = await get_all_users_count()
+    await cb.message.edit_text(f"⚙️ Пользователей в БД: {count}", 
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙", callback_data="main_menu")]]))
 
 # --- ЗАПУСК ---
 async def main():
     await init_db()
-    print("Бот запущен. Ожидание обновлений...")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    print("Бот запущен v2.0 Pro")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот остановлен.")
+        pass
