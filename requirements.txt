@@ -1,4 +1,2 @@
-aiohttp
-python-socketio
-aiogram
-uvloop
+aiogram>=3.0
+aiosqlite
