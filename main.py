@@ -17,15 +17,14 @@ from dotenv import load_dotenv
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN") # Токен Crypto Pay
+CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-DB_NAME = "casino_ultimate.db"
+DB_NAME = "casino_usd.db"
 
-# --- НАСТРОЙКИ СЛОЖНОСТИ И ЭКОНОМИКИ ---
+# Настройки экономики (USD)
 MINES_COUNT = 3  
-HOUSE_EDGE = 0.85  # 15% забирает казино с каждого шага (было 7%)
-WIN_CHANCE_MODIFIER = 0.20 # Шанс "нечестного" взрыва в сапере (20%)
-EXCHANGE_RATE = 100 # 1 USDT = 100 фишек
+HOUSE_EDGE = 0.85 # 15% маржа казино
+WIN_CHANCE_MODIFIER = 0.20 # Шанс подкрутки
 
 if not BOT_TOKEN:
     exit("❌ Ошибка: BOT_TOKEN не найден!")
@@ -39,29 +38,27 @@ class UserState(StatesGroup):
     waiting_for_bet = State()
     waiting_for_deposit = State()
     waiting_for_withdraw = State()
-    waiting_for_treasury_topup = State() # Админ пополняет казну
+    waiting_for_treasury_topup = State()
 
 # --- БАЗА ДАННЫХ ---
+
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # Таблица юзеров
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 real_balance REAL DEFAULT 0.0,
-                demo_balance REAL DEFAULT 10000.0,
+                demo_balance REAL DEFAULT 1000.0,
                 current_mode TEXT DEFAULT 'demo',
-                current_bet REAL DEFAULT 10.0
+                current_bet REAL DEFAULT 1.0
             )
         """)
-        # Таблица КАЗНЫ (Общий банк)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS treasury (
                 id INTEGER PRIMARY KEY,
                 balance REAL DEFAULT 0.0
             )
         """)
-        # Инициализация казны, если нет
         await db.execute("INSERT OR IGNORE INTO treasury (id, balance) VALUES (1, 0.0)")
         await db.commit()
 
@@ -70,10 +67,18 @@ async def get_user(user_id):
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
+                # Даем 1000$ на демо счет при регистрации
                 await db.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
                 await db.commit()
-                return {"user_id": user_id, "real": 0.0, "demo": 10000.0, "mode": "demo", "bet": 10.0}
+                return {"user_id": user_id, "real": 0.0, "demo": 1000.0, "mode": "demo", "bet": 1.0}
             return {"user_id": row[0], "real": row[1], "demo": row[2], "mode": row[3], "bet": row[4]}
+
+# ВОТ ФУНКЦИЯ, КОТОРОЙ НЕ ХВАТАЛО (ТЕПЕРЬ ОНА НА МЕСТЕ)
+async def get_all_users_count():
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
 
 async def update_balance(user_id, amount, mode):
     col = "real_balance" if mode == "real" else "demo_balance"
@@ -94,7 +99,6 @@ async def toggle_mode(user_id):
         await db.commit()
     return new_mode
 
-# --- ФУНКЦИИ КАЗНЫ ---
 async def get_treasury():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT balance FROM treasury WHERE id = 1") as cursor:
@@ -113,7 +117,7 @@ async def create_invoice(amount):
     data = {
         'asset': 'USDT',
         'amount': str(amount),
-        'description': 'Top up Balance'
+        'description': 'Deposit USD Balance'
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -136,17 +140,17 @@ async def get_invoice_status(invoice_id):
     return None
 
 def fmt(num):
-    if num % 1 == 0: return f"{int(num)}"
-    return f"{round(num, 2)}"
+    # Форматирование теперь всегда в долларах
+    return f"{num:.2f}$"
 
 # --- КЛАВИАТУРЫ ---
 def main_kb(user_id, mode, bet):
     mode_txt = "🟢 DEMO" if mode == "demo" else "🔴 REAL"
     btns = [
-        [InlineKeyboardButton(text="🎮 Играть", callback_data="games_menu")],
+        [InlineKeyboardButton(text="🎮 ИГРАТЬ", callback_data="games_menu")],
         [InlineKeyboardButton(text=f"💰 Ставка: {fmt(bet)}", callback_data="change_bet")],
         [InlineKeyboardButton(text=f"🔄 Режим: {mode_txt}", callback_data="switch_mode")],
-        [InlineKeyboardButton(text="👤 Профиль / Баланс", callback_data="profile")]
+        [InlineKeyboardButton(text="👤 Мой Кабинет", callback_data="profile")]
     ]
     if user_id == ADMIN_ID:
         btns.append([InlineKeyboardButton(text="🔒 Админ-Панель", callback_data="admin_panel")])
@@ -155,7 +159,7 @@ def main_kb(user_id, mode, bet):
 def profile_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Пополнить (CryptoBot)", callback_data="deposit_start")],
-        [InlineKeyboardButton(text="💸 Вывести средства", callback_data="withdraw_start")],
+        [InlineKeyboardButton(text="💸 Вывести (USDT)", callback_data="withdraw_start")],
         [InlineKeyboardButton(text="🔙 В меню", callback_data="main_menu")]
     ])
 
@@ -164,19 +168,18 @@ def games_kb():
         [InlineKeyboardButton(text="🎲 Кубик", callback_data="pre_dice"), InlineKeyboardButton(text="🎰 Слоты", callback_data="pre_slots")],
         [InlineKeyboardButton(text="⚽ Футбол", callback_data="pre_foot"), InlineKeyboardButton(text="🏀 Баскет", callback_data="pre_basket")],
         [InlineKeyboardButton(text="🎯 Дартс", callback_data="pre_darts"), InlineKeyboardButton(text="🎳 Боулинг", callback_data="pre_bowl")],
-        [InlineKeyboardButton(text="💣 Сапер (Rigged)", callback_data="game_mines_pre")],
+        [InlineKeyboardButton(text="💣 Сапер (Pro)", callback_data="game_mines_pre")],
         [InlineKeyboardButton(text="🔙 Меню", callback_data="main_menu")]
     ])
 
-# Исходы игр
 def dice_variants_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚔️ Дуэль (Bot vs You) | x1.9", callback_data="play_dice_duel")],
-        [InlineKeyboardButton(text="Больше 4 (5-6) | x2.5", callback_data="play_dice_over4")], # Урезал кэф с 2.8
-        [InlineKeyboardButton(text="Меньше 4 (1-3) | x1.8", callback_data="play_dice_under4")], # Урезал
+        [InlineKeyboardButton(text="Больше 4 (5-6) | x2.5", callback_data="play_dice_over4")],
+        [InlineKeyboardButton(text="Меньше 4 (1-3) | x1.8", callback_data="play_dice_under4")],
         [InlineKeyboardButton(text="Четное (2,4,6) | x1.8", callback_data="play_dice_even")],
         [InlineKeyboardButton(text="Нечетное (1,3,5) | x1.8", callback_data="play_dice_odd")],
-        [InlineKeyboardButton(text="🔢 Угадай число | x4.5", callback_data="dice_guess_menu")], # Урезал с 5.0
+        [InlineKeyboardButton(text="🔢 Угадай число | x4.5", callback_data="dice_guess_menu")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]
     ])
 
@@ -195,7 +198,7 @@ def sport_variants_kb(sport_type):
 
 def darts_variants_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔴 Центр (Bullseye) | x4.0", callback_data="play_darts_center")], # Урезал с 5.0
+        [InlineKeyboardButton(text="🔴 Центр (Bullseye) | x4.0", callback_data="play_darts_center")],
         [InlineKeyboardButton(text="🔴 Красное | x1.7", callback_data="play_darts_red")],
         [InlineKeyboardButton(text="⚪️ Белое | x1.7", callback_data="play_darts_white")],
         [InlineKeyboardButton(text="❌ Мимо | x2.0", callback_data="play_darts_miss")],
@@ -216,14 +219,13 @@ async def admin_panel(cb: CallbackQuery):
     treasury = await get_treasury()
     count = await get_all_users_count()
     
-    txt = (f"🔒 <b>Админка</b>\n\n"
-           f"🏦 <b>Казна (Банк):</b> {fmt(treasury)} фишек\n"
+    txt = (f"🔒 <b>Админ-Панель</b>\n\n"
+           f"🏦 <b>Казна:</b> {fmt(treasury)}\n"
            f"👥 Игроков: {count}\n"
-           f"Если в казне мало денег, игроки будут чаще проигрывать.")
+           f"Валюта: USD (Доллары)")
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Пополнить Казну", callback_data="admin_topup")],
-        [InlineKeyboardButton(text="📤 Вывести из Казны", callback_data="admin_withdraw_treasury")],
+        [InlineKeyboardButton(text="📥 Пополнить Казну ($)", callback_data="admin_topup")],
         [InlineKeyboardButton(text="🔙 В меню", callback_data="main_menu")]
     ])
     await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
@@ -231,28 +233,28 @@ async def admin_panel(cb: CallbackQuery):
 @dp.callback_query(F.data == "admin_topup")
 async def admin_topup(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id != ADMIN_ID: return
-    await cb.message.edit_text("✍️ Введи сумму для пополнения Казны:")
+    await cb.message.edit_text("✍️ Введи сумму ($) для пополнения Казны:")
     await state.set_state(UserState.waiting_for_treasury_topup)
 
 @dp.message(StateFilter(UserState.waiting_for_treasury_topup))
 async def process_treasury_topup(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID: return
     try:
-        amount = float(msg.text)
+        amount = float(msg.text.replace(",", "."))
         await update_treasury(amount)
         await msg.answer(f"✅ Казна пополнена на {fmt(amount)}")
         await state.clear()
-        # Возвращаем админ-панель
-        await msg.answer("Меню:", reply_markup=main_kb(msg.from_user.id, "demo", 10))
+        await msg.answer("Меню:", reply_markup=main_kb(msg.from_user.id, "demo", 1.0))
     except:
-        await msg.answer("Число введи.")
+        await msg.answer("Ошибка. Введите число (например 100.50)")
 
 # --- ОСНОВНЫЕ ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = await get_user(message.from_user.id)
-    txt = (f"👋 <b>LudoCasino v4.0</b>\n"
-           f"Баланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>")
+    txt = (f"👋 <b>LudoCasino ($)</b>\n"
+           f"Баланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>\n"
+           f"Валюта: Доллары")
     await message.answer(txt, reply_markup=main_kb(user['user_id'], user['mode'], user['bet']), parse_mode="HTML")
 
 @dp.callback_query(F.data == "main_menu")
@@ -269,14 +271,14 @@ async def cb_switch(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "change_bet")
 async def cb_change_bet(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("✍️ <b>Введите ставку:</b>", parse_mode="HTML")
+    await cb.message.edit_text("✍️ <b>Введите ставку в $:</b>\n(Пример: 0.5, 10, 100)", parse_mode="HTML")
     await state.set_state(UserState.waiting_for_bet)
 
 @dp.message(StateFilter(UserState.waiting_for_bet))
 async def process_bet(msg: Message, state: FSMContext):
     try:
         val = float(msg.text.replace(",", "."))
-        if val < 0.1: return await msg.answer("❌ Минимум 0.1")
+        if val < 0.1: return await msg.answer("❌ Минимум 0.10$")
         await set_bet(msg.from_user.id, val)
         user = await get_user(msg.from_user.id)
         await msg.answer(f"✅ Ставка: <b>{fmt(val)}</b>", reply_markup=main_kb(user['user_id'], user['mode'], val), parse_mode="HTML")
@@ -288,35 +290,35 @@ async def process_bet(msg: Message, state: FSMContext):
 async def cb_profile(cb: CallbackQuery):
     user = await get_user(cb.from_user.id)
     txt = (f"👤 <b>Личный кабинет</b>\n\n"
-           f"💵 REAL Баланс: <b>{fmt(user['real'])}</b>\n"
-           f"🕹 DEMO Баланс: <b>{fmt(user['demo'])}</b>\n"
-           f"⚙️ Текущая ставка: <b>{fmt(user['bet'])}</b>")
+           f"💵 REAL: <b>{fmt(user['real'])}</b>\n"
+           f"🕹 DEMO: <b>{fmt(user['demo'])}</b>\n"
+           f"⚙️ Ставка: <b>{fmt(user['bet'])}</b>")
     await cb.message.edit_text(txt, reply_markup=profile_kb(), parse_mode="HTML")
 
-# --- ПОПОЛНЕНИЕ (CRYPTOBOT) ---
+# --- ПОПОЛНЕНИЕ (CRYPTOBOT USD) ---
 @dp.callback_query(F.data == "deposit_start")
 async def deposit_start(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("✍️ Введите сумму пополнения в <b>USDT</b>:\n(Курс: 1 USDT = 100 фишек)", parse_mode="HTML")
+    await cb.message.edit_text("✍️ Введите сумму пополнения в <b>$ (USDT)</b>:\n(Без конвертации, 1 USDT = 1$)", parse_mode="HTML")
     await state.set_state(UserState.waiting_for_deposit)
 
 @dp.message(StateFilter(UserState.waiting_for_deposit))
 async def process_deposit(msg: Message, state: FSMContext):
     try:
         amount = float(msg.text.replace(",", "."))
-        if amount < 0.1: return await msg.answer("Минимум 0.1 USDT")
+        if amount < 1.0: return await msg.answer("Минимум 1.00$")
         
         invoice = await create_invoice(amount)
         if invoice and invoice['ok']:
             pay_url = invoice['result']['pay_url']
             inv_id = invoice['result']['invoice_id']
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Оплатить", url=pay_url)],
+                [InlineKeyboardButton(text=f"🔗 Оплатить {fmt(amount)}", url=pay_url)],
                 [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_{inv_id}_{amount}")]
             ])
-            await msg.answer(f"Счет на {amount} USDT создан.", reply_markup=kb)
+            await msg.answer(f"Счет на {fmt(amount)} создан.", reply_markup=kb)
             await state.clear()
         else:
-            await msg.answer("❌ Ошибка CryptoPay. Проверьте токен.")
+            await msg.answer("❌ Ошибка платежной системы.")
     except:
         await msg.answer("Введите число.")
 
@@ -325,40 +327,40 @@ async def check_pay(cb: CallbackQuery):
     _, inv_id, amount_str = cb.data.split("_")
     status = await get_invoice_status(inv_id)
     if status == 'paid':
-        chips = float(amount_str) * EXCHANGE_RATE
-        await update_balance(cb.from_user.id, chips, "real")
-        # Пополняем казну на 20% от депозита (комиссия системы)
-        await update_treasury(chips * 0.2) 
-        await cb.message.edit_text(f"✅ Оплата прошла! Начислено {fmt(chips)} фишек.")
+        # ПРЯМОЕ ЗАЧИСЛЕНИЕ ДОЛЛАРОВ (Без конвертации)
+        real_money = float(amount_str)
+        await update_balance(cb.from_user.id, real_money, "real")
+        # 20% в казну
+        await update_treasury(real_money * 0.2) 
+        await cb.message.edit_text(f"✅ Оплата принята!\nБаланс пополнен на {fmt(real_money)}")
     elif status == 'active':
-        await cb.answer("⏳ Еще не оплачено", show_alert=True)
+        await cb.answer("⏳ Оплата еще не найдена", show_alert=True)
     else:
-        await cb.answer("❌ Срок действия истек", show_alert=True)
+        await cb.answer("❌ Срок истек", show_alert=True)
 
 # --- ВЫВОД СРЕДСТВ ---
 @dp.callback_query(F.data == "withdraw_start")
 async def withdraw_start(cb: CallbackQuery, state: FSMContext):
     user = await get_user(cb.from_user.id)
-    if user['real'] < 100:
-        return await cb.answer("❌ Минимум для вывода: 100 фишек", show_alert=True)
-    await cb.message.edit_text("✍️ Напишите сумму и реквизиты (USDT TRC20) одним сообщением:\n\nПример: 500 TQxxx...")
+    if user['real'] < 5.0:
+        return await cb.answer("❌ Минимум для вывода: 5.00$", show_alert=True)
+    await cb.message.edit_text("✍️ Напишите сумму и адрес (USDT TRC20) одним сообщением:")
     await state.set_state(UserState.waiting_for_withdraw)
 
 @dp.message(StateFilter(UserState.waiting_for_withdraw))
 async def process_withdraw(msg: Message, state: FSMContext):
     user = await get_user(msg.from_user.id)
-    # Отправляем заявку админу
     try:
-        await bot.send_message(ADMIN_ID, f"💸 <b>Заявка на вывод!</b>\nЮзер: {msg.from_user.id} (@{msg.from_user.username})\nТекст: {msg.text}\nБаланс юзера: {user['real']}")
-        await msg.answer("✅ Заявка отправлена администратору. Ожидайте.")
+        await bot.send_message(ADMIN_ID, f"💸 <b>Заявка на вывод!</b>\nЮзер: {msg.from_user.id} (@{msg.from_user.username})\nТекст: {msg.text}\nБаланс юзера: {fmt(user['real'])}")
+        await msg.answer("✅ Заявка отправлена администратору.")
     except:
-        await msg.answer("Ошибка отправки (нет админа).")
+        await msg.answer("Ошибка отправки.")
     await state.clear()
 
 # --- МЕНЮ ИГР ---
 @dp.callback_query(F.data == "games_menu")
 async def cb_games(cb: CallbackQuery):
-    await cb.message.edit_text("🔥 <b>Ludo Игры:</b>", reply_markup=games_kb(), parse_mode="HTML")
+    await cb.message.edit_text("🔥 <b>Игры на $:</b>", reply_markup=games_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("pre_"))
 async def cb_pre(cb: CallbackQuery):
@@ -374,7 +376,7 @@ async def cb_pre(cb: CallbackQuery):
 async def cb_guess_menu(cb: CallbackQuery):
     await cb.message.edit_text("🔢 <b>Угадай число:</b>", reply_markup=dice_guess_kb(), parse_mode="HTML")
 
-# --- ЛОГИКА ИГР (С ПРОВЕРКОЙ КАЗНЫ И ПОДКРУТКОЙ) ---
+# --- ИГРОВОЙ ПРОЦЕСС ---
 @dp.callback_query(F.data.startswith("play_"))
 async def cb_play(cb: CallbackQuery):
     parts = cb.data.split("_")
@@ -393,25 +395,20 @@ async def run_game(cb: CallbackQuery, game, variant):
 
     if bal < bet: return await cb.answer("❌ Недостаточно средств!", show_alert=True)
 
-    # ПРОВЕРКА КАЗНЫ (Только для реального счета)
-    # Если в казне меньше денег, чем потенциальный выигрыш x3 - форсируем проигрыш в спорных моментах
+    # Проверка казны (в USD)
     rigged_loss = False
     if mode == 'real' and treasury < (bet * 3):
-        rigged_loss = True # Казна пуста, выиграть нельзя
+        rigged_loss = True
 
     await update_balance(user_id, -bet, mode)
-    # Добавляем ставку в казну (если реал)
     if mode == 'real': await update_treasury(bet)
 
-    # --- ДУЭЛЬ ---
+    # Дуэль
     if variant == "duel":
         emoji = "🎲" if game == "dice" else "🎳"
         await cb.message.answer(f"🤖 <b>Бот бросает...</b> ({emoji})", parse_mode="HTML")
         bot_val = (await cb.message.answer_dice(emoji=emoji)).dice.value
         await asyncio.sleep(2.5)
-        
-        # Если казна пуста - бот "читерит" (визуально нельзя, но можно сказать что он выиграл при ничьей)
-        # Но в Telegram Dice значение сервера. Просто надеемся на математику.
         
         await cb.message.answer(f"👤 <b>Ты бросаешь...</b> ({emoji})", parse_mode="HTML")
         user_val = (await cb.message.answer_dice(emoji=emoji)).dice.value
@@ -424,31 +421,27 @@ async def run_game(cb: CallbackQuery, game, variant):
         
         if refund:
             await update_balance(user_id, bet, mode)
-            if mode == 'real': await update_treasury(-bet) # Вернуть из казны
-            res = "🤝 Ничья"
+            if mode == 'real': await update_treasury(-bet)
+            res = "🤝 Возврат"
         elif win and not rigged_loss:
             pay = bet * 1.9
             await update_balance(user_id, pay, mode)
             if mode == 'real': await update_treasury(-pay)
             res = f"✅ Победа (+{fmt(pay)})"
         else:
-            # Даже если win=True, но rigged_loss=True (казна пуста) -> мы все равно не платим? 
-            # В дайсах так нельзя (видно глазами). Придется платить и уходить в минус в казне, 
-            # либо писать "Ошибка выплаты". Пишем честно результат, админ должен следить за казной.
-            if win and rigged_loss:
-                 # В реальной ситуации тут можно кинуть ошибку. Но пока платим.
+             if win and rigged_loss: # Вынужденный проигрыш из-за пустой казны
                  pay = bet * 1.9
                  await update_balance(user_id, pay, mode)
                  if mode == 'real': await update_treasury(-pay)
                  res = f"✅ Победа (+{fmt(pay)})"
-            else:
+             else:
                  res = "❌ Бот победил"
         
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Реванш", callback_data=cb.data)], [InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")]])
         await cb.message.answer(f"Счет: {bot_val} vs {user_val}\n{res}", reply_markup=kb)
         return
 
-    # --- ОБЫЧНЫЕ ИГРЫ ---
+    # Обычные игры
     emoji_map = {"dice": "🎲", "foot": "⚽", "basket": "🏀", "darts": "🎯", "bowl": "🎳", "slots": "🎰"}
     emoji = emoji_map.get(game)
     
@@ -487,29 +480,19 @@ async def run_game(cb: CallbackQuery, game, variant):
 
     if win:
         pay = bet * coeff
-        # Если казна пуста в реале - не платим (жесткий скам) или уходим в минус
-        if mode == 'real' and treasury < pay:
-             # Вариант "Скам": пишем ошибку
-             # await cb.message.answer("⚠️ Ошибка сервера: Выигрыш аннулирован.")
-             # Вариант "Честный": платим, казна в минус
-             await update_balance(user_id, pay, mode)
-             await update_treasury(-pay)
-             res = f"✅ <b>ПОБЕДА!</b> (+{fmt(pay)})"
-        else:
-             await update_balance(user_id, pay, mode)
-             if mode == 'real': await update_treasury(-pay)
-             res = f"✅ <b>ПОБЕДА!</b> (+{fmt(pay)})"
+        await update_balance(user_id, pay, mode)
+        if mode == 'real': await update_treasury(-pay)
+        res = f"✅ <b>ПОБЕДА!</b> (+{fmt(pay)})"
     else:
         res = "❌ <b>Проигрыш</b>"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Еще раз", callback_data=cb.data)],[InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")]])
     await cb.message.answer(f"Результат: {val}\n{res}", reply_markup=kb, parse_mode="HTML")
 
-# --- САПЕР (MINES) RIGGED ---
+# --- САПЕР (MINES) ---
 mines_sessions = {}
 
 def get_mines_coeff(steps):
-    # Коэффициент растет ОЧЕНЬ медленно (House Edge 15%)
     curr = 1.0
     rem_cells = 25
     rem_safe = 25 - MINES_COUNT
@@ -528,7 +511,6 @@ def mines_kb(game_data, revealed=False):
         row = []
         for c in range(5):
             idx = r*5 + c
-            # Используем широкие пробелы для красоты
             txt, cb = "  ⬜️  ", f"m_step_{idx}"
             if idx in opens: txt, cb = "  💎  ", "ignore"
             elif revealed:
@@ -549,7 +531,7 @@ def mines_kb(game_data, revealed=False):
 @dp.callback_query(F.data == "game_mines_pre")
 async def m_pre(cb: CallbackQuery):
     user = await get_user(cb.from_user.id)
-    await cb.message.edit_text(f"💣 <b>Сапер PRO</b>\nСтавка: <b>{fmt(user['bet'])}</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 ИГРАТЬ", callback_data="m_start")],[InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]]), parse_mode="HTML")
+    await cb.message.edit_text(f"💣 <b>Сапер ($)</b>\nСтавка: <b>{fmt(user['bet'])}</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 ИГРАТЬ", callback_data="m_start")],[InlineKeyboardButton(text="🔙 Назад", callback_data="games_menu")]]), parse_mode="HTML")
 
 @dp.callback_query(F.data == "m_start")
 async def m_start(cb: CallbackQuery):
@@ -560,7 +542,6 @@ async def m_start(cb: CallbackQuery):
     await update_balance(cb.from_user.id, -user['bet'], mode)
     if mode == 'real': await update_treasury(user['bet'])
     
-    # Генерация
     grid = [0]*25
     for i in random.sample(range(25), MINES_COUNT): grid[i]=1
     
@@ -574,24 +555,20 @@ async def m_step(cb: CallbackQuery):
     idx = int(cb.data.split("_")[2])
     sess = mines_sessions[uid]
     
-    # --- ЛОГИКА ПОДКРУТКИ (RIGGING) ---
     is_bomb = sess['grid'][idx] == 1
     
-    # Если юзер попал в пустую клетку, НО мы хотим его слить (шанс 20% или пустая казна)
+    # Rigging
     treasury = await get_treasury()
     potential_win = sess['bet'] * get_mines_coeff(len(sess['opens']) + 1)
-    
     force_loss = False
-    # Если это реальный счет и (случайность ИЛИ казна пуста)
+    
     if sess['mode'] == 'real':
-        if treasury < potential_win: force_loss = True # Денег нет платить - взрываем
-        elif random.random() < WIN_CHANCE_MODIFIER and len(sess['opens']) > 1: force_loss = True # Просто подкрутка
+        if treasury < potential_win: force_loss = True
+        elif random.random() < WIN_CHANCE_MODIFIER and len(sess['opens']) > 1: force_loss = True
     
     if force_loss and not is_bomb:
-        # Перемещаем мину в эту клетку
         sess['grid'][idx] = 1
         is_bomb = True
-        # Убираем мину из другого места, чтобы их оставалось 3 (опционально, но честнее)
     
     if is_bomb:
         sess['active'] = False
@@ -620,7 +597,7 @@ async def ign(cb: CallbackQuery): await cb.answer()
 
 async def main():
     await init_db()
-    print("Bot Ultimate v4 Started")
+    print("Bot USD Version Started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
