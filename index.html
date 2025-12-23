@@ -3,461 +3,272 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ScarFace Hub</title>
-    
+    <title>EasyWin</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap" rel="stylesheet">
     <style>
-        :root { 
-            --bg: #050505; 
-            --card: #141414; 
-            --gold: #FFD700; 
-            --gold-shadow: #b39700;
-            --text: #ffffff; 
-            --green: #10b981; 
-            --red: #ef4444;
-            --gray: #6b7280;
-        }
-        
+        :root { --bg: #09090b; --card: #18181b; --gold: #eab308; --text: #fff; --green: #22c55e; --red: #ef4444; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }
-        
-        body { 
-            margin: 0; 
-            background: var(--bg); 
-            color: var(--text); 
-            font-family: 'Montserrat', sans-serif; 
-            height: 100vh; 
-            overflow: hidden; 
-            display: flex; 
-            flex-direction: column;
-            user-select: none;
-        }
+        body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Montserrat', sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-        /* === LOADER === */
-        #loader { 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: #000; z-index: 9999; 
-            display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            transition: opacity 0.5s;
-        }
-        .spinner { 
-            width: 50px; height: 50px; 
-            border: 4px solid #222; border-top: 4px solid var(--gold); 
-            border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
-        /* === HEADER === */
-        .header { 
-            padding: 15px 20px; 
-            display: flex; justify-content: space-between; align-items: center; 
-            background: #0a0a0a; border-bottom: 1px solid #222; z-index: 50;
-        }
-        .logo { font-weight: 900; font-style: italic; font-size: 18px; letter-spacing: -0.5px; }
+        /* HEADER */
+        .header { padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; background: #000; border-bottom: 1px solid #222; }
+        .logo { font-weight: 900; font-size: 20px; font-style: italic; }
         .logo span { color: var(--gold); }
-        .balance-pill { 
-            background: #1a1a1a; padding: 6px 12px; border-radius: 20px; 
-            font-weight: 700; font-size: 14px; color: var(--gold); 
-            border: 1px solid #333; display: flex; align-items: center; gap: 5px;
-        }
+        .balance { background: #222; padding: 6px 12px; border-radius: 12px; font-weight: 700; color: var(--gold); border: 1px solid #333; }
 
-        /* === PAGES SYSTEM === */
-        .content-area { flex: 1; overflow-y: auto; padding-bottom: 80px; position: relative; }
-        .page { display: none; padding: 20px; animation: fadeIn 0.3s ease; }
-        .page.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* SCREENS */
+        .screen { display: none; flex: 1; flex-direction: column; padding: 20px; overflow-y: auto; }
+        .screen.active { display: flex; }
 
-        /* === HUB (HOME) === */
-        .section-header h2 { margin: 0 0 5px 0; font-size: 24px; }
-        .section-header p { margin: 0 0 20px 0; color: var(--gray); font-size: 13px; }
+        /* GAMES GRID */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .game-card { background: var(--card); border: 1px solid #27272a; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: pointer; transition: 0.1s; }
+        .game-card:active { transform: scale(0.96); background: #222; }
+        .g-icon { font-size: 40px; }
+        .g-name { font-weight: 700; font-size: 14px; }
 
-        .game-card { 
-            background: linear-gradient(145deg, #1a1a1a, #0f0f0f); 
-            border-radius: 16px; padding: 15px; margin-bottom: 15px; 
-            border: 1px solid #222; display: flex; align-items: center; gap: 15px;
-            position: relative; transition: transform 0.1s;
-        }
-        .game-card:active { transform: scale(0.98); background: #222; }
-        .game-icon { font-size: 32px; width: 50px; text-align: center; }
-        .game-info h3 { margin: 0; font-size: 16px; font-weight: 800; }
-        .game-info p { margin: 3px 0 0; font-size: 11px; color: var(--gray); }
-        .status-badge { 
-            position: absolute; top: 10px; right: 10px; 
-            font-size: 10px; padding: 3px 8px; border-radius: 6px; 
-            font-weight: 800; letter-spacing: 0.5px;
-        }
-        .live { background: rgba(16, 185, 129, 0.1); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.2); }
-        .soon { background: rgba(255, 255, 255, 0.05); color: var(--gray); border: 1px solid #333; }
-
-        /* === CRASH GAME === */
-        .crash-wrapper { 
-            position: relative; height: 280px; 
-            background: radial-gradient(circle at 50% 100%, #222 0%, #000 70%); 
-            border-radius: 20px; overflow: hidden; margin-bottom: 15px; border: 1px solid #222;
-        }
-        #crashCanvas { width: 100%; height: 100%; }
-        .center-overlay { 
-            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); 
-            text-align: center; 
-        }
-        #multiplier { font-size: 60px; font-weight: 900; text-shadow: 0 0 30px rgba(0,0,0,0.8); }
-        #multiplier.crashed { color: var(--red); }
-        #game-status { font-size: 12px; font-weight: 700; color: var(--gray); letter-spacing: 2px; margin-top: 5px; }
+        /* GAME UI */
+        .game-area { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        .result-display { font-size: 100px; transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .result-text { font-size: 18px; font-weight: 800; margin-top: 20px; height: 24px; }
+        .win { color: var(--green); } .lose { color: var(--red); }
 
         /* CONTROLS */
-        .controls-box { background: var(--card); padding: 20px; border-radius: 20px; border: 1px solid #222; }
+        .controls { background: var(--card); padding: 20px; border-radius: 20px 20px 0 0; border-top: 1px solid #222; }
         
-        .input-row { display: flex; gap: 10px; margin-bottom: 15px; }
-        .input-wrapper { 
-            flex: 1; background: #000; border: 1px solid #333; border-radius: 12px; 
-            display: flex; align-items: center; padding: 0 15px; 
-        }
-        .bet-input { 
-            width: 100%; background: none; border: none; color: white; 
-            font-size: 18px; font-weight: 700; text-align: center; padding: 12px 0; 
-            font-family: 'Montserrat', sans-serif;
-        }
-        .adj-btn { 
-            width: 50px; background: #222; border: 1px solid #333; color: white; 
-            border-radius: 12px; font-size: 20px; font-weight: bold; 
-        }
+        .modes-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 10px; }
+        .mode-btn { padding: 10px 15px; background: #27272a; border-radius: 10px; font-size: 12px; font-weight: 700; color: #aaa; white-space: nowrap; border: 1px solid transparent; cursor: pointer; }
+        .mode-btn.selected { background: rgba(234, 179, 8, 0.15); color: var(--gold); border-color: var(--gold); }
 
-        .action-btn { 
-            width: 100%; height: 55px; border: none; border-radius: 14px; 
-            font-size: 18px; font-weight: 800; cursor: pointer; transition: 0.1s; 
-        }
-        .btn-gold { background: var(--gold); color: #000; box-shadow: 0 4px 0 var(--gold-shadow); }
-        .btn-green { background: var(--green); color: white; box-shadow: 0 4px 0 #047857; }
-        .btn-gray { background: #222; color: #555; pointer-events: none; }
-        .btn-gold:active, .btn-green:active { transform: translateY(4px); box-shadow: none; }
+        .bet-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        .input-box { flex: 1; background: #000; border: 1px solid #333; border-radius: 12px; display: flex; align-items: center; padding: 0 15px; }
+        input { width: 100%; background: none; border: none; color: white; font-size: 18px; font-weight: 700; padding: 12px 0; text-align: center; }
+        
+        .play-btn { width: 100%; height: 55px; background: var(--gold); border: none; border-radius: 14px; font-size: 18px; font-weight: 900; color: #000; cursor: pointer; }
+        .play-btn:disabled { background: #333; color: #555; }
+        .play-btn:active { transform: translateY(2px); }
 
-        /* PLAYERS LIST */
-        .players-list { margin-top: 20px; font-size: 13px; }
-        .p-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #222; color: #aaa; }
-        .p-win { color: var(--green); font-weight: bold; }
-
-        /* === REFERRAL === */
-        .ref-card { 
-            background: var(--card); padding: 30px 20px; border-radius: 20px; 
-            text-align: center; border: 1px solid #222; margin-top: 20px;
-        }
-        .ref-link-box { 
-            background: #000; padding: 15px; border-radius: 10px; 
-            font-family: monospace; color: var(--gold); margin: 20px 0; 
-            word-break: break-all; font-size: 12px; border: 1px dashed #333; 
-        }
-
-        /* === NAV BAR === */
-        .nav-bar { 
-            position: fixed; bottom: 0; width: 100%; height: 70px; 
-            background: #0a0a0a; border-top: 1px solid #222; 
-            display: flex; justify-content: space-around; align-items: center; z-index: 100;
-        }
-        .nav-item { 
-            display: flex; flex-direction: column; align-items: center; gap: 4px; 
-            font-size: 10px; font-weight: 700; color: #444; transition: 0.2s; 
-        }
-        .nav-item.active { color: var(--gold); transform: translateY(-2px); }
-        .nav-icon { font-size: 24px; }
-
+        .back-btn { position: absolute; top: 0; left: 0; padding: 10px; color: #666; font-weight: 700; cursor: pointer; }
     </style>
 </head>
 <body>
 
-    <div id="loader">
-        <div class="spinner"></div>
-        <div style="font-size:12px; color:#666;">Connecting to ScarFace Server...</div>
-    </div>
-
     <div class="header">
-        <div class="logo">ScarFace<span>Team</span></div>
-        <div class="balance-pill">💎 <span id="balance">...</span></div>
+        <div class="logo">Easy<span>Win</span></div>
+        <div class="balance">💎 <span id="bal">...</span></div>
     </div>
 
-    <div class="content-area">
+    <div id="hub" class="screen active">
+        <h2 style="margin-top:0">Игры</h2>
+        <div class="grid">
+            <div class="game-card" onclick="openGame('cube')">
+                <div class="g-icon">🎲</div>
+                <div class="g-name">Куб</div>
+            </div>
+            <div class="game-card" onclick="openGame('football')">
+                <div class="g-icon">⚽</div>
+                <div class="g-name">Футбол</div>
+            </div>
+            <div class="game-card" onclick="openGame('basket')">
+                <div class="g-icon">🏀</div>
+                <div class="g-name">Баскет</div>
+            </div>
+            <div class="game-card" onclick="openGame('darts')">
+                <div class="g-icon">🎯</div>
+                <div class="g-name">Дартс</div>
+            </div>
+            <div class="game-card" onclick="openGame('bowling')">
+                <div class="g-icon">🎳</div>
+                <div class="g-name">Боулинг</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="game-room" class="screen">
+        <div class="back-btn" onclick="toHub()">← Назад</div>
         
-        <div id="page-hub" class="page active">
-            <div class="section-header">
-                <h2>Game Hub</h2>
-                <p>Выбери игру и побеждай</p>
-            </div>
-
-            <div class="game-card" onclick="navTo('page-crash')">
-                <div class="game-icon">🚀</div>
-                <div class="game-info" style="flex:1">
-                    <h3>Epic Crash</h3>
-                    <p>Поймай иксы до взрыва</p>
-                </div>
-                <div class="status-badge live">LIVE</div>
-            </div>
-
-            <div class="game-card" style="opacity: 0.6;">
-                <div class="game-icon">🎲</div>
-                <div class="game-info" style="flex:1">
-                    <h3>Board Game</h3>
-                    <p>Кидай кубики (Скоро)</p>
-                </div>
-                <div class="status-badge soon">SOON</div>
-            </div>
-
-            <div class="game-card" style="opacity: 0.6;">
-                <div class="game-icon">🎰</div>
-                <div class="game-info" style="flex:1">
-                    <h3>Casino</h3>
-                    <p>Classic Slots (Dev)</p>
-                </div>
-                <div class="status-badge soon">DEV</div>
-            </div>
+        <div class="game-area">
+            <div id="display" class="result-display">🎲</div>
+            <div id="res-text" class="result-text"></div>
         </div>
 
-        <div id="page-crash" class="page">
-            <button onclick="navTo('page-hub')" style="background:none; border:none; color:#666; font-weight:bold; margin-bottom:10px;">← Назад в меню</button>
-            
-            <div class="crash-wrapper">
-                <canvas id="crashCanvas"></canvas>
-                <div class="center-overlay">
-                    <div id="multiplier">1.00x</div>
-                    <div id="game-status">ОЖИДАНИЕ</div>
+        <div class="controls">
+            <div class="modes-scroll" id="modes-list"></div>
+
+            <div class="bet-row">
+                <div class="input-box">
+                    <input type="number" id="bet" value="10" step="1">
                 </div>
             </div>
-
-            <div class="controls-box">
-                <div class="input-row">
-                    <button class="adj-btn" onclick="adjBet(-10)">-</button>
-                    <div class="input-wrapper">
-                        <input type="number" id="betInput" class="bet-input" value="10" step="0.1" min="0.1">
-                    </div>
-                    <button class="adj-btn" onclick="adjBet(10)">+</button>
-                </div>
-                <button id="mainBtn" class="action-btn btn-gold" onclick="doAction()">ПОСТАВИТЬ</button>
-            </div>
-
-            <div class="players-list" id="playersList">
-                </div>
-        </div>
-
-        <div id="page-earn" class="page">
-            <div class="ref-card">
-                <div style="font-size:40px; margin-bottom:15px">🤝</div>
-                <h2>Партнерская программа</h2>
-                <p style="color:#888; font-size:13px; margin-top:10px;">
-                    Приглашай друзей и получай <b style="color:var(--gold)">0.5%</b> от их пополнений пожизненно.
-                </p>
-                <div class="ref-link-box" id="refLink">Загрузка ссылки...</div>
-                <button class="action-btn btn-gold" onclick="copyRef()">КОПИРОВАТЬ</button>
-            </div>
-        </div>
-
-    </div>
-
-    <div class="nav-bar">
-        <div class="nav-item active" onclick="navTo('page-hub', this)">
-            <span class="nav-icon">🏠</span>Hub
-        </div>
-        <div class="nav-item" onclick="navTo('page-earn', this)">
-            <span class="nav-icon">💸</span>Earn
+            <button class="play-btn" id="btn-play" onclick="play()">ИГРАТЬ</button>
         </div>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
-
-        // ⚠️ ВАЖНО: Твой URL Bothost
-        const SERVER_URL = "https://bot_1766306473_1270_metropabg189-gmail-c.bothost.ru"; 
         
-        // 1. ПОДКЛЮЧЕНИЕ (Polling для стабильности)
-        const socket = io(SERVER_URL, { 
-            transports: ['polling', 'websocket'], 
-            reconnectionAttempts: 20
-        });
+        // ВАЖНО: Твой URL
+        const SERVER_URL = "https://bot_1766306473_1270_metropabg189-gmail-c.bothost.ru";
+        const socket = io(SERVER_URL, { transports: ['polling', 'websocket'] });
 
-        // Данные
-        let user = { id: new URLSearchParams(window.location.search).get('user_id'), bal: 0 };
-        let game = { status: 'WAITING', m: 1.0, myBet: 0, inGame: false };
+        let curGame = null;
+        let curMode = null;
+        let userBal = 0;
+        let isPlaying = false;
 
-        // --- SOCKET HANDLERS ---
-        
+        // --- GAME CONFIGS ---
+        const GAMES = {
+            'cube': {
+                icon: '🎲',
+                modes: [
+                    {id: 'over_4', name: 'Больше 4 (x2.8)'},
+                    {id: 'under_4', name: 'Меньше 4 (x1.4)'},
+                    {id: 'even', name: 'Чет (x1.9)'},
+                    {id: 'odd', name: 'Нечет (x1.9)'},
+                    {id: 'over_5', name: 'Больше 5 (x5.5)'},
+                    {id: 'under_2', name: 'Меньше 2 (x5.5)'}
+                ]
+            },
+            'football': {
+                icon: '⚽',
+                modes: [
+                    {id: 'goal', name: 'Гол (x1.6)'},
+                    {id: 'miss', name: 'Мимо (x2.3)'}
+                ]
+            },
+            'basket': {
+                icon: '🏀',
+                modes: [
+                    {id: 'goal', name: 'Попал (x2.3)'},
+                    {id: 'miss', name: 'Мимо (x1.5)'}
+                ]
+            },
+            'darts': {
+                icon: '🎯',
+                modes: [
+                    {id: 'center', name: 'Центр (x5.5)'},
+                    {id: 'color', name: 'Цвет (x1.4)'},
+                    {id: 'miss', name: 'Мимо (x5.5)'}
+                ]
+            },
+            'bowling': {
+                icon: '🎳',
+                modes: [
+                    {id: 'strike', name: 'Страйк (x5.5)'},
+                    {id: 'miss', name: 'Не страйк (x1.15)'}
+                ]
+            }
+        };
+
+        // --- SOCKET ---
         socket.on('connect', () => {
-            // Скрываем лоадер
-            document.getElementById('loader').style.opacity = '0';
-            setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+            const uid = new URLSearchParams(window.location.search).get('user_id');
+            socket.emit('auth', { user_id: uid });
+        });
+
+        socket.on('balance', b => {
+            userBal = b;
+            document.getElementById('bal').innerText = b.toFixed(1);
+        });
+
+        socket.on('game_result', res => {
+            isPlaying = false;
+            document.getElementById('btn-play').disabled = false;
+            document.getElementById('btn-play').innerText = "ИГРАТЬ";
+
+            // Анимация результата
+            const disp = document.getElementById('display');
+            const txt = document.getElementById('res-text');
             
-            // Авторизация
-            socket.emit('auth', { user_id: user.id });
+            // Если кубик/футбол, показываем значение
+            // Для упрощения просто показываем Эмодзи игры
+            // Можно доработать под конкретные кадры, но пока так:
             
-            // Генерируем ссылку (замени CryptoKazBot на свой юзернейм если отличается)
-            document.getElementById('refLink').innerText = `https://t.me/CryptoKazBot?start=${user.id}`;
-        });
-
-        socket.on('balance', val => {
-            user.bal = val;
-            document.getElementById('balance').innerText = val.toFixed(1);
-        });
-
-        socket.on('game_update', d => {
-            game.status = d.status;
-            renderPlayers(d.players || []);
-            if(game.status === 'WAITING') {
-                game.inGame = false;
-                resetGameUI();
-            }
-            updateBtn();
-        });
-
-        socket.on('tick', m => {
-            game.status = 'FLYING';
-            game.m = m;
-            document.getElementById('multiplier').innerText = m.toFixed(2) + 'x';
-            document.getElementById('multiplier').classList.remove('crashed');
-            document.getElementById('game-status').innerText = "ПОЛЕТ...";
-            updateBtn();
-            drawRocket(m);
-        });
-
-        socket.on('crash', d => {
-            game.status = 'CRASHED';
-            document.getElementById('multiplier').innerText = d.m.toFixed(2) + 'x';
-            document.getElementById('multiplier').classList.add('crashed');
-            document.getElementById('game-status').innerText = "КРАШ";
-            tg.HapticFeedback.notificationOccurred('error');
-            updateBtn();
-        });
-
-        socket.on('bet_ok', () => {
-            game.inGame = true;
-            game.myBet = parseFloat(document.getElementById('betInput').value);
-            tg.HapticFeedback.impactOccurred('medium');
-            updateBtn();
-        });
-
-        socket.on('win', (amt) => {
-            game.inGame = false;
-            tg.HapticFeedback.notificationOccurred('success');
-            updateBtn();
-        });
-        
-        socket.on('players_update', renderPlayers);
-
-        // --- ЛОГИКА UI ---
-        
-        function navTo(pageId, navEl) {
-            // Переключение страниц
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.getElementById(pageId).classList.add('active');
-            
-            // Переключение иконок меню
-            if(navEl) {
-                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-                navEl.classList.add('active');
-            }
-        }
-
-        function adjBet(val) {
-            let input = document.getElementById('betInput');
-            let current = parseFloat(input.value) || 0;
-            let res = Math.max(0.1, current + val);
-            input.value = res.toFixed(1);
-        }
-
-        function doAction() {
-            let betVal = parseFloat(document.getElementById('betInput').value);
-            
-            if(game.status === 'WAITING') {
-                if(!game.inGame) {
-                    if(betVal > 0 && betVal <= user.bal) {
-                        socket.emit('place_bet', betVal);
-                    } else {
-                        tg.HapticFeedback.notificationOccurred('warning');
-                    }
-                }
-            } else if(game.status === 'FLYING' && game.inGame) {
-                socket.emit('cash_out');
-            }
-        }
-
-        function updateBtn() {
-            let btn = document.getElementById('mainBtn');
-            if(game.status === 'WAITING') {
-                if(game.inGame) {
-                    btn.className = "action-btn btn-gray";
-                    btn.innerText = "СТАВКА ПРИНЯТА";
-                } else {
-                    btn.className = "action-btn btn-gold";
-                    btn.innerText = "ПОСТАВИТЬ";
-                }
-            } else if(game.status === 'FLYING') {
-                if(game.inGame) {
-                    btn.className = "action-btn btn-green";
-                    btn.innerText = `ЗАБРАТЬ ${(game.myBet * game.m).toFixed(1)}`;
-                } else {
-                    btn.className = "action-btn btn-gray";
-                    btn.innerText = "ИДЕТ РАУНД...";
-                }
+            // Показываем результат (WIN/LOSE)
+            if(res.win) {
+                tg.HapticFeedback.notificationOccurred('success');
+                txt.innerText = `WIN (+${res.win_amt.toFixed(1)})`;
+                txt.className = "result-text win";
+                disp.style.transform = "scale(1.5)";
             } else {
-                btn.className = "action-btn btn-gray";
-                btn.innerText = "КРАШ";
+                tg.HapticFeedback.notificationOccurred('error');
+                txt.innerText = "LOSE";
+                txt.className = "result-text lose";
+                disp.style.transform = "scale(0.8)";
             }
-        }
-
-        function resetGameUI() {
-            document.getElementById('multiplier').innerText = "1.00x";
-            document.getElementById('multiplier').classList.remove('crashed');
-            document.getElementById('game-status').innerText = "ОЖИДАНИЕ";
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            updateBtn();
-        }
-
-        function renderPlayers(list) {
-            let html = list.map(p => `
-                <div class="p-row">
-                    <span>ID ${p.uid}</span>
-                    <span class="${p.win > 0 ? 'p-win' : ''}">
-                        ${p.win > 0 ? '+' + p.win.toFixed(1) : p.bet.toFixed(1)}
-                    </span>
-                </div>
-            `).join('');
-            document.getElementById('playersList').innerHTML = html;
-        }
-
-        function copyRef() {
-            let txt = document.getElementById('refLink').innerText;
-            navigator.clipboard.writeText(txt);
-            tg.ShowPopup({message: "Ссылка скопирована!"});
-        }
-
-        // --- ГРАФИКА РАКЕТЫ ---
-        const canvas = document.getElementById('crashCanvas');
-        const ctx = canvas.getContext('2d');
-        function resize() { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; }
-        window.addEventListener('resize', resize); resize();
-
-        function drawRocket(m) {
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            let w = canvas.width, h = canvas.height;
             
-            // Кривая
-            let p = Math.min((m-1)/5, 1); 
-            let x = 40 + (w-80)*p;
-            let y = (h-40) - (h-80)*Math.sqrt(p);
+            setTimeout(() => { disp.style.transform = "scale(1)"; }, 300);
             
-            // Линия
-            ctx.beginPath();
-            ctx.strokeStyle = '#FFD700';
-            ctx.lineWidth = 4;
-            ctx.shadowBlur = 10; ctx.shadowColor = '#FFD700';
-            ctx.moveTo(40, h-40);
-            ctx.quadraticCurveTo(w/2, h-40, x, y);
-            ctx.stroke();
-            ctx.shadowBlur = 0;
+            userBal = res.balance;
+            document.getElementById('bal').innerText = userBal.toFixed(1);
+        });
+
+        // --- UI FUNCS ---
+        function openGame(key) {
+            curGame = key;
+            const conf = GAMES[key];
             
-            // Ракета
-            ctx.font = "30px Arial"; 
-            ctx.fillText("🚀", x-15, y);
+            // Setup Screen
+            document.getElementById('display').innerText = conf.icon;
+            document.getElementById('res-text').innerText = "";
+            document.getElementById('hub').classList.remove('active');
+            document.getElementById('game-room').classList.add('active');
+
+            // Setup Modes
+            const list = document.getElementById('modes-list');
+            list.innerHTML = "";
+            conf.modes.forEach((m, idx) => {
+                const btn = document.createElement('div');
+                btn.className = "mode-btn";
+                btn.innerText = m.name;
+                btn.onclick = () => selectMode(m.id, btn);
+                if (idx === 0) selectMode(m.id, btn); // Auto select first
+                list.appendChild(btn);
+            });
         }
+
+        function selectMode(id, btn) {
+            curMode = id;
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('selected'));
+            if(btn) btn.classList.add('selected');
+        }
+
+        function toHub() {
+            document.getElementById('game-room').classList.remove('active');
+            document.getElementById('hub').classList.add('active');
+        }
+
+        function play() {
+            if(isPlaying) return;
+            
+            const bet = parseFloat(document.getElementById('bet').value);
+            if(bet <= 0 || bet > userBal) {
+                tg.HapticFeedback.notificationOccurred('warning');
+                return;
+            }
+
+            isPlaying = true;
+            document.getElementById('btn-play').disabled = true;
+            document.getElementById('btn-play').innerText = "ROLLING...";
+            document.getElementById('res-text').innerText = "";
+            
+            // Анимация "тряски"
+            const disp = document.getElementById('display');
+            disp.style.transform = "rotate(10deg)";
+            setTimeout(() => disp.style.transform = "rotate(-10deg)", 100);
+            setTimeout(() => disp.style.transform = "rotate(0deg)", 200);
+
+            // Отправка на сервер
+            socket.emit('play', {
+                game: curGame,
+                mode: curMode,
+                bet: bet
+            });
+        }
+
     </script>
 </body>
 </html>
