@@ -11,7 +11,6 @@ from aiogram.types import (
 )
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
 from dotenv import load_dotenv
 
 # --- КОНФИГУРАЦИЯ ---
@@ -19,12 +18,12 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-DB_NAME = "casino_usd.db"
+DB_NAME = "casino_usd_final.db"
 
 # Настройки экономики (USD)
 MINES_COUNT = 3  
-HOUSE_EDGE = 0.85 # 15% маржа казино
-WIN_CHANCE_MODIFIER = 0.20 # Шанс подкрутки
+HOUSE_EDGE = 0.94 # 6% маржа (было 15%), чтобы кэфы были вкуснее
+WIN_CHANCE_MODIFIER = 0.20 # Шанс принудительного взрыва в Сапере
 
 if not BOT_TOKEN:
     exit("❌ Ошибка: BOT_TOKEN не найден!")
@@ -41,7 +40,6 @@ class UserState(StatesGroup):
     waiting_for_treasury_topup = State()
 
 # --- БАЗА ДАННЫХ ---
-
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("""
@@ -67,13 +65,11 @@ async def get_user(user_id):
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
-                # Даем 1000$ на демо счет при регистрации
                 await db.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
                 await db.commit()
                 return {"user_id": user_id, "real": 0.0, "demo": 1000.0, "mode": "demo", "bet": 1.0}
             return {"user_id": row[0], "real": row[1], "demo": row[2], "mode": row[3], "bet": row[4]}
 
-# ВОТ ФУНКЦИЯ, КОТОРОЙ НЕ ХВАТАЛО (ТЕПЕРЬ ОНА НА МЕСТЕ)
 async def get_all_users_count():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
@@ -110,20 +106,33 @@ async def update_treasury(amount):
         await db.execute("UPDATE treasury SET balance = balance + ? WHERE id = 1", (amount,))
         await db.commit()
 
-# --- CRYPTOBOT API ---
-async def create_invoice(amount):
-    headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
+# --- CRYPTOBOT API (FIXED) ---
+async def create_invoice(amount, description="Deposit USD"):
+    if not CRYPTO_TOKEN:
+        logging.error("CRYPTO_TOKEN is missing")
+        return None
+        
+    headers = {
+        'Crypto-Pay-API-Token': CRYPTO_TOKEN,
+        'User-Agent': 'LudoBot/2.0' # Важно для защиты от ошибок 403
+    }
     url = 'https://pay.cryptobot.net/api/createInvoice'
     data = {
         'asset': 'USDT',
         'amount': str(amount),
-        'description': 'Deposit USD Balance'
+        'description': description
     }
     try:
-        async with aiohttp.ClientSession() as session:
+        # Добавлен таймаут 10 секунд
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, headers=headers, json=data) as resp:
-                return await resp.json()
-    except:
+                result = await resp.json()
+                if not result.get('ok'):
+                    logging.error(f"CryptoBot Error: {result}")
+                return result
+    except Exception as e:
+        logging.error(f"Network Error: {e}")
         return None
 
 async def get_invoice_status(invoice_id):
@@ -140,7 +149,6 @@ async def get_invoice_status(invoice_id):
     return None
 
 def fmt(num):
-    # Форматирование теперь всегда в долларах
     return f"{num:.2f}$"
 
 # --- КЛАВИАТУРЫ ---
@@ -168,7 +176,7 @@ def games_kb():
         [InlineKeyboardButton(text="🎲 Кубик", callback_data="pre_dice"), InlineKeyboardButton(text="🎰 Слоты", callback_data="pre_slots")],
         [InlineKeyboardButton(text="⚽ Футбол", callback_data="pre_foot"), InlineKeyboardButton(text="🏀 Баскет", callback_data="pre_basket")],
         [InlineKeyboardButton(text="🎯 Дартс", callback_data="pre_darts"), InlineKeyboardButton(text="🎳 Боулинг", callback_data="pre_bowl")],
-        [InlineKeyboardButton(text="💣 Сапер (Pro)", callback_data="game_mines_pre")],
+        [InlineKeyboardButton(text="💣 Сапер (Boosted)", callback_data="game_mines_pre")],
         [InlineKeyboardButton(text="🔙 Меню", callback_data="main_menu")]
     ])
 
@@ -225,28 +233,46 @@ async def admin_panel(cb: CallbackQuery):
            f"Валюта: USD (Доллары)")
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Пополнить Казну ($)", callback_data="admin_topup")],
+        [InlineKeyboardButton(text="📥 Пополнить Казну (CryptoBot)", callback_data="admin_deposit_treasury")],
         [InlineKeyboardButton(text="🔙 В меню", callback_data="main_menu")]
     ])
     await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
 
-@dp.callback_query(F.data == "admin_topup")
-async def admin_topup(cb: CallbackQuery, state: FSMContext):
-    if cb.from_user.id != ADMIN_ID: return
-    await cb.message.edit_text("✍️ Введи сумму ($) для пополнения Казны:")
+@dp.callback_query(F.data == "admin_deposit_treasury")
+async def admin_deposit_start(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("✍️ Введи сумму ($) для пополнения <b>Банка бота</b>:", parse_mode="HTML")
     await state.set_state(UserState.waiting_for_treasury_topup)
 
 @dp.message(StateFilter(UserState.waiting_for_treasury_topup))
-async def process_treasury_topup(msg: Message, state: FSMContext):
-    if msg.from_user.id != ADMIN_ID: return
+async def process_treasury_invoice(msg: Message, state: FSMContext):
     try:
         amount = float(msg.text.replace(",", "."))
-        await update_treasury(amount)
-        await msg.answer(f"✅ Казна пополнена на {fmt(amount)}")
-        await state.clear()
-        await msg.answer("Меню:", reply_markup=main_kb(msg.from_user.id, "demo", 1.0))
-    except:
-        await msg.answer("Ошибка. Введите число (например 100.50)")
+        # Создаем РЕАЛЬНЫЙ инвойс
+        invoice = await create_invoice(amount, "Treasury Top-up")
+        
+        if invoice and invoice.get('ok'):
+            pay_url = invoice['result']['pay_url']
+            inv_id = invoice['result']['invoice_id']
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"💳 Оплатить {fmt(amount)}", url=pay_url)],
+                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"checktreasury_{inv_id}_{amount}")]
+            ])
+            await msg.answer(f"Счет для пополнения Казны создан.", reply_markup=kb)
+            await state.clear()
+        else: 
+            await msg.answer("❌ Ошибка CryptoBot. Проверь токен и логи.")
+    except Exception as e: 
+        await msg.answer(f"Ошибка ввода: {e}")
+
+@dp.callback_query(F.data.startswith("checktreasury_"))
+async def check_treasury_pay(cb: CallbackQuery):
+    _, inv_id, amount = cb.data.split("_")
+    status = await get_invoice_status(inv_id)
+    if status == 'paid':
+        await update_treasury(float(amount))
+        await cb.message.edit_text(f"✅ <b>Банк пополнен!</b>\nКазна успешно увеличена на {amount}$", parse_mode="HTML")
+    else: 
+        await cb.answer("Оплата еще не прошла", show_alert=True)
 
 # --- ОСНОВНЫЕ ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
@@ -295,10 +321,10 @@ async def cb_profile(cb: CallbackQuery):
            f"⚙️ Ставка: <b>{fmt(user['bet'])}</b>")
     await cb.message.edit_text(txt, reply_markup=profile_kb(), parse_mode="HTML")
 
-# --- ПОПОЛНЕНИЕ (CRYPTOBOT USD) ---
+# --- ПОПОЛНЕНИЕ ЮЗЕРА (CRYPTOBOT USD) ---
 @dp.callback_query(F.data == "deposit_start")
 async def deposit_start(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("✍️ Введите сумму пополнения в <b>$ (USDT)</b>:\n(Без конвертации, 1 USDT = 1$)", parse_mode="HTML")
+    await cb.message.edit_text("✍️ Введите сумму пополнения в <b>$ (USDT)</b>:", parse_mode="HTML")
     await state.set_state(UserState.waiting_for_deposit)
 
 @dp.message(StateFilter(UserState.waiting_for_deposit))
@@ -307,8 +333,8 @@ async def process_deposit(msg: Message, state: FSMContext):
         amount = float(msg.text.replace(",", "."))
         if amount < 1.0: return await msg.answer("Минимум 1.00$")
         
-        invoice = await create_invoice(amount)
-        if invoice and invoice['ok']:
+        invoice = await create_invoice(amount, "User Deposit")
+        if invoice and invoice.get('ok'):
             pay_url = invoice['result']['pay_url']
             inv_id = invoice['result']['invoice_id']
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -327,11 +353,9 @@ async def check_pay(cb: CallbackQuery):
     _, inv_id, amount_str = cb.data.split("_")
     status = await get_invoice_status(inv_id)
     if status == 'paid':
-        # ПРЯМОЕ ЗАЧИСЛЕНИЕ ДОЛЛАРОВ (Без конвертации)
         real_money = float(amount_str)
         await update_balance(cb.from_user.id, real_money, "real")
-        # 20% в казну
-        await update_treasury(real_money * 0.2) 
+        await update_treasury(real_money * 0.2) # 20% комиссия в казну
         await cb.message.edit_text(f"✅ Оплата принята!\nБаланс пополнен на {fmt(real_money)}")
     elif status == 'active':
         await cb.answer("⏳ Оплата еще не найдена", show_alert=True)
@@ -344,14 +368,14 @@ async def withdraw_start(cb: CallbackQuery, state: FSMContext):
     user = await get_user(cb.from_user.id)
     if user['real'] < 5.0:
         return await cb.answer("❌ Минимум для вывода: 5.00$", show_alert=True)
-    await cb.message.edit_text("✍️ Напишите сумму и адрес (USDT TRC20) одним сообщением:")
+    await cb.message.edit_text("✍️ Напишите сумму и адрес (USDT TRC20):")
     await state.set_state(UserState.waiting_for_withdraw)
 
 @dp.message(StateFilter(UserState.waiting_for_withdraw))
 async def process_withdraw(msg: Message, state: FSMContext):
     user = await get_user(msg.from_user.id)
     try:
-        await bot.send_message(ADMIN_ID, f"💸 <b>Заявка на вывод!</b>\nЮзер: {msg.from_user.id} (@{msg.from_user.username})\nТекст: {msg.text}\nБаланс юзера: {fmt(user['real'])}")
+        await bot.send_message(ADMIN_ID, f"💸 <b>Заявка на вывод!</b>\nЮзер: {msg.from_user.id} (@{msg.from_user.username})\nТекст: {msg.text}\nБаланс: {fmt(user['real'])}")
         await msg.answer("✅ Заявка отправлена администратору.")
     except:
         await msg.answer("Ошибка отправки.")
@@ -395,7 +419,6 @@ async def run_game(cb: CallbackQuery, game, variant):
 
     if bal < bet: return await cb.answer("❌ Недостаточно средств!", show_alert=True)
 
-    # Проверка казны (в USD)
     rigged_loss = False
     if mode == 'real' and treasury < (bet * 3):
         rigged_loss = True
@@ -403,7 +426,6 @@ async def run_game(cb: CallbackQuery, game, variant):
     await update_balance(user_id, -bet, mode)
     if mode == 'real': await update_treasury(bet)
 
-    # Дуэль
     if variant == "duel":
         emoji = "🎲" if game == "dice" else "🎳"
         await cb.message.answer(f"🤖 <b>Бот бросает...</b> ({emoji})", parse_mode="HTML")
@@ -429,7 +451,7 @@ async def run_game(cb: CallbackQuery, game, variant):
             if mode == 'real': await update_treasury(-pay)
             res = f"✅ Победа (+{fmt(pay)})"
         else:
-             if win and rigged_loss: # Вынужденный проигрыш из-за пустой казны
+             if win and rigged_loss:
                  pay = bet * 1.9
                  await update_balance(user_id, pay, mode)
                  if mode == 'real': await update_treasury(-pay)
@@ -441,7 +463,6 @@ async def run_game(cb: CallbackQuery, game, variant):
         await cb.message.answer(f"Счет: {bot_val} vs {user_val}\n{res}", reply_markup=kb)
         return
 
-    # Обычные игры
     emoji_map = {"dice": "🎲", "foot": "⚽", "basket": "🏀", "darts": "🎯", "bowl": "🎳", "slots": "🎰"}
     emoji = emoji_map.get(game)
     
@@ -489,19 +510,21 @@ async def run_game(cb: CallbackQuery, game, variant):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Еще раз", callback_data=cb.data)],[InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")]])
     await cb.message.answer(f"Результат: {val}\n{res}", reply_markup=kb, parse_mode="HTML")
 
-# --- САПЕР (MINES) ---
+# --- САПЕР (MINES) BOOSTED ---
 mines_sessions = {}
 
 def get_mines_coeff(steps):
-    curr = 1.0
-    rem_cells = 25
-    rem_safe = 25 - MINES_COUNT
-    for _ in range(steps):
-        chance = rem_safe / rem_cells
-        curr *= (1 / chance) * HOUSE_EDGE
-        rem_cells -= 1
-        rem_safe -= 1
-    return round(curr, 2)
+    # ГЕОМЕТРИЧЕСКАЯ ПРОГРЕССИЯ
+    # HOUSE_EDGE = 0.94 (очень низкая комиссия, чтобы росли цифры)
+    multiplier = 1.0
+    for i in range(steps):
+        # Реальный математический шанс
+        chance = (25 - MINES_COUNT - i) / (25 - i)
+        # Наш множитель
+        multiplier *= (1 / chance)
+    
+    # Применяем маржу казино
+    return round(multiplier * HOUSE_EDGE, 2)
 
 def mines_kb(game_data, revealed=False):
     kb = []
