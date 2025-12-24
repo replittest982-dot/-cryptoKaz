@@ -18,7 +18,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-DB_NAME = "casino_usd_pro.db"
+DB_NAME = "easywin_db.db"
 
 # Настройки экономики (USD)
 MINES_COUNT = 3  
@@ -114,9 +114,9 @@ async def create_invoice(amount, description="Deposit USD"):
         
     headers = {
         'Crypto-Pay-API-Token': CRYPTO_TOKEN,
-        'User-Agent': 'LudoBot/4.0'
+        'User-Agent': 'EasyWin/1.0'
     }
-    # !!! ОБНОВЛЕННЫЙ URL !!!
+    # ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ДОМЕН
     url = 'https://pay.crypt.bot/api/createInvoice'
     
     data = {
@@ -126,7 +126,7 @@ async def create_invoice(amount, description="Deposit USD"):
     }
     
     try:
-        # Оставляем aggressive fix для сети (IPv4 + No SSL verify)
+        # Фикс для хостинга: IPv4 + SSL False
         connector = aiohttp.TCPConnector(ssl=False, family=2)
         timeout = aiohttp.ClientTimeout(total=20)
         
@@ -142,7 +142,6 @@ async def create_invoice(amount, description="Deposit USD"):
 
 async def get_invoice_status(invoice_id):
     headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
-    # !!! ОБНОВЛЕННЫЙ URL !!!
     url = f'https://pay.crypt.bot/api/getInvoices?invoice_ids={invoice_id}'
     try:
         connector = aiohttp.TCPConnector(ssl=False, family=2)
@@ -234,7 +233,7 @@ async def admin_panel(cb: CallbackQuery):
     treasury = await get_treasury()
     count = await get_all_users_count()
     
-    txt = (f"🔒 <b>Админ-Панель</b>\n\n"
+    txt = (f"🔒 <b>Админ-Панель 𝐄𝐚𝐬𝐲𝐖𝐈𝐍</b>\n\n"
            f"🏦 <b>Казна:</b> {fmt(treasury)}\n"
            f"👥 Игроков: {count}\n"
            f"Валюта: USD (Доллары)")
@@ -284,7 +283,7 @@ async def check_treasury_pay(cb: CallbackQuery):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = await get_user(message.from_user.id)
-    txt = (f"👋 <b>LudoCasino ($)</b>\n"
+    txt = (f"👋 <b>𝐄𝐚𝐬𝐲𝐖𝐈𝐍 ($)</b>\n"
            f"Баланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>\n"
            f"Валюта: Доллары")
     await message.answer(txt, reply_markup=main_kb(user['user_id'], user['mode'], user['bet']), parse_mode="HTML")
@@ -623,7 +622,7 @@ async def ign(cb: CallbackQuery): await cb.answer()
 
 async def main():
     await init_db()
-    print("Bot USD Version (Domain Fix) Started")
+    print("EasyWin Bot Started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
