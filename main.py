@@ -292,22 +292,26 @@ async def check_treasury_pay(cb: CallbackQuery):
     else: 
         await cb.answer("Оплата еще не прошла", show_alert=True)
 
-# --- ОСНОВНЫЕ ХЕНДЛЕРЫ И REPLY КНОПКА ---
+# --- ОСНОВНЫЕ ХЕНДЛЕРЫ ---
 @dp.message(F.text == "🔙 Главное меню")
 async def reply_home_handler(message: Message, state: FSMContext):
     await state.clear()
-    await cmd_start(message)
+    # ВОТ ЗДЕСЬ ТЕПЕРЬ ПОКАЗЫВАЕМ МЕНЮ С БАЛАНСОМ
+    user = await get_user(message.from_user.id)
+    txt = (f"🏠 <b>Главное меню</b>\n"
+           f"Баланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>\n"
+           f"Валюта: Доллары")
+    await message.answer(txt, reply_markup=main_kb(user['user_id'], user['mode'], user['bet']), parse_mode="HTML")
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    user = await get_user(message.from_user.id)
-    txt = (f"👋 <b>𝐄𝐚𝐬𝐲𝐖𝐈𝐍 ($)</b>\n"
-           f"Баланс: <b>{fmt(user['demo'] if user['mode']=='demo' else user['real'])}</b>\n"
-           f"Валюта: Доллары")
-    # Добавляем get_reply_kb()
-    await message.answer(txt, reply_markup=main_kb(user['user_id'], user['mode'], user['bet']), parse_mode="HTML")
-    # Отправляем нижнюю кнопку
-    await message.answer("Меню навигации:", reply_markup=get_reply_kb())
+    # ПРОСТОЙ СТАРТ
+    await get_user(message.from_user.id)
+    await message.answer(
+        "👋 <b>Добро пожаловать в 𝐄𝐚𝐬𝐲𝐖𝐈𝐍!</b>\n\nЧтобы начать играть, нажмите кнопку <b>«🔙 Главное меню»</b> внизу.",
+        reply_markup=get_reply_kb(), 
+        parse_mode="HTML"
+    )
 
 @dp.callback_query(F.data == "main_menu")
 async def cb_menu(cb: CallbackQuery, state: FSMContext):
