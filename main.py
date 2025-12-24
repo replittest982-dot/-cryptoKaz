@@ -42,6 +42,7 @@ class UserState(StatesGroup):
 # --- БАЗА ДАННЫХ ---
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
+        # Таблица пользователей
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -51,10 +52,21 @@ async def init_db():
                 current_bet REAL DEFAULT 1.0
             )
         """)
+        # Таблица Казны (Банка)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS treasury (
                 id INTEGER PRIMARY KEY,
                 balance REAL DEFAULT 0.0
+            )
+        """)
+        # Таблица Заявок на вывод (История)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount REAL,
+                wallet TEXT,
+                status TEXT DEFAULT 'pending'
             )
         """)
         await db.execute("INSERT OR IGNORE INTO treasury (id, balance) VALUES (1, 0.0)")
@@ -106,7 +118,13 @@ async def update_treasury(amount):
         await db.execute("UPDATE treasury SET balance = balance + ? WHERE id = 1", (amount,))
         await db.commit()
 
-# --- CRYPTOBOT API (НОВЫЙ ДОМЕН PAY.CRYPT.BOT) ---
+async def add_withdrawal(user_id, amount, wallet):
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("INSERT INTO withdrawals (user_id, amount, wallet) VALUES (?, ?, ?)", (user_id, amount, wallet))
+        await db.commit()
+        return cursor.lastrowid
+
+# --- CRYPTOBOT API ---
 async def create_invoice(amount, description="Deposit USD"):
     if not CRYPTO_TOKEN:
         logging.error("CRYPTO_TOKEN is missing")
@@ -126,7 +144,7 @@ async def create_invoice(amount, description="Deposit USD"):
     }
     
     try:
-        # Фикс для хостинга: IPv4 + SSL False
+        # Фикс для хостинга
         connector = aiohttp.TCPConnector(ssl=False, family=2)
         timeout = aiohttp.ClientTimeout(total=20)
         
@@ -279,6 +297,33 @@ async def check_treasury_pay(cb: CallbackQuery):
     else: 
         await cb.answer("Оплата еще не прошла", show_alert=True)
 
+# --- ЛОГИКА ВЫПЛАТ (ADMIN APPROVAL) ---
+
+@dp.callback_query(F.data.startswith("adm_pay_"))
+async def admin_pay_process(cb: CallbackQuery):
+    # data format: adm_pay_yes_UID_AMOUNT or adm_pay_no_UID_AMOUNT
+    if cb.from_user.id != ADMIN_ID: return
+    
+    parts = cb.data.split("_")
+    action = parts[2] # yes / no
+    uid = int(parts[3])
+    amount = float(parts[4])
+    
+    if action == "yes":
+        # Просто меняем сообщение, деньги уже списаны при заявке
+        await cb.message.edit_text(f"✅ <b>ВЫПЛАЧЕНО!</b>\nЮзер: {uid}\nСумма: {fmt(amount)}", parse_mode="HTML")
+        # Уведомляем юзера
+        try: await bot.send_message(uid, f"✅ <b>Ваша заявка на вывод {fmt(amount)} одобрена!</b>\nСредства отправлены.", parse_mode="HTML")
+        except: pass
+        
+    elif action == "no":
+        # Возвращаем деньги юзеру
+        await update_balance(uid, amount, "real")
+        await cb.message.edit_text(f"❌ <b>ОТКЛОНЕНО</b> (Деньги возвращены)\nЮзер: {uid}\nСумма: {fmt(amount)}", parse_mode="HTML")
+        # Уведомляем юзера
+        try: await bot.send_message(uid, f"❌ <b>Заявка на вывод отклонена.</b>\nСредства ({fmt(amount)}) возвращены на баланс.", parse_mode="HTML")
+        except: pass
+
 # --- ОСНОВНЫЕ ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -367,24 +412,56 @@ async def check_pay(cb: CallbackQuery):
     else:
         await cb.answer("❌ Срок истек", show_alert=True)
 
-# --- ВЫВОД СРЕДСТВ ---
+# --- ВЫВОД СРЕДСТВ (ОБНОВЛЕННАЯ ЛОГИКА) ---
 @dp.callback_query(F.data == "withdraw_start")
 async def withdraw_start(cb: CallbackQuery, state: FSMContext):
     user = await get_user(cb.from_user.id)
     if user['real'] < 5.0:
         return await cb.answer("❌ Минимум для вывода: 5.00$", show_alert=True)
-    await cb.message.edit_text("✍️ Напишите сумму и адрес (USDT TRC20):")
+    await cb.message.edit_text("✍️ Напишите <b>СУММУ</b> и <b>АДРЕС TRC20</b>:\n\nПример: <code>10 TQxxxxxxxx...</code>", parse_mode="HTML")
     await state.set_state(UserState.waiting_for_withdraw)
 
 @dp.message(StateFilter(UserState.waiting_for_withdraw))
 async def process_withdraw(msg: Message, state: FSMContext):
     user = await get_user(msg.from_user.id)
     try:
-        await bot.send_message(ADMIN_ID, f"💸 <b>Заявка на вывод!</b>\nЮзер: {msg.from_user.id} (@{msg.from_user.username})\nТекст: {msg.text}\nБаланс: {fmt(user['real'])}")
-        await msg.answer("✅ Заявка отправлена администратору.")
-    except:
-        await msg.answer("Ошибка отправки.")
-    await state.clear()
+        # Простая валидация: пробуем найти число в начале сообщения
+        parts = msg.text.split()
+        amount = float(parts[0].replace(",", "."))
+        wallet = " ".join(parts[1:]) if len(parts) > 1 else "Не указан"
+        
+        if amount > user['real']:
+             return await msg.answer("❌ Недостаточно средств на балансе!")
+        if amount < 5.0:
+             return await msg.answer("❌ Минимум 5$")
+
+        # 1. Списываем баланс сразу (Hold)
+        await update_balance(msg.from_user.id, -amount, "real")
+        
+        # 2. Сохраняем в БД (можно добавить время, но пока просто факт)
+        await add_withdrawal(msg.from_user.id, amount, wallet)
+        
+        # 3. Отправляем админу с кнопками
+        user_link = f"<a href='tg://user?id={msg.from_user.id}'>{msg.from_user.full_name}</a>"
+        admin_text = (f"💸 <b>НОВАЯ ЗАЯВКА!</b>\n"
+                      f"👤 Юзер: {user_link} (ID: {msg.from_user.id})\n"
+                      f"💰 Сумма: <b>{fmt(amount)}</b>\n"
+                      f"💳 Адрес: <code>{wallet}</code>\n"
+                      f"Остаток юзера: {fmt(user['real'] - amount)}")
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ ВЫПЛАТИЛ", callback_data=f"adm_pay_yes_{msg.from_user.id}_{amount}")],
+            [InlineKeyboardButton(text="❌ ОТКЛОНИТЬ (Вернуть)", callback_data=f"adm_pay_no_{msg.from_user.id}_{amount}")]
+        ])
+        
+        await bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode="HTML")
+        await msg.answer("✅ Заявка создана! Ожидайте подтверждения администратора.")
+        await state.clear()
+        
+    except ValueError:
+        await msg.answer("❌ Неверный формат. Сначала число, потом кошелек.\nПример: <code>100 TQ...</code>", parse_mode="HTML")
+    except Exception as e:
+        await msg.answer(f"Ошибка: {e}")
 
 # --- МЕНЮ ИГР ---
 @dp.callback_query(F.data == "games_menu")
@@ -622,7 +699,7 @@ async def ign(cb: CallbackQuery): await cb.answer()
 
 async def main():
     await init_db()
-    print("EasyWin Bot Started")
+    print("EasyWin Pro Started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
